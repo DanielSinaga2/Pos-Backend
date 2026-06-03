@@ -1,0 +1,114 @@
+@baseUrl = http://localhost:8080
+@adminToken = paste-admin-token-here
+@cashierToken = paste-cashier-token-here
+@kitchenToken = paste-kitchen-token-here
+@orderCode = paste-order-code-here
+@orderId = paste-order-id-here
+
+### 1. Health check
+GET {{baseUrl}}/api/health
+
+### 2. Login admin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@mail.com",
+  "password": "admin123"
+}
+
+### 3. Login cashier
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "cashier@mail.com",
+  "password": "cashier123"
+}
+
+### 4. Login kitchen
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "kitchen@mail.com",
+  "password": "kitchen123"
+}
+
+### 5. Get public menu
+GET {{baseUrl}}/api/public/menu
+
+### Optional: Admin create menu
+POST {{baseUrl}}/api/menus
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "category_id": 1,
+  "name": "Menu Testing",
+  "description": "Menu untuk mencoba endpoint admin",
+  "price": 10000,
+  "image_url": "",
+  "is_available": true
+}
+
+### Optional: Admin generate QR meja
+POST {{baseUrl}}/api/qrcodes/generate-table/1
+Authorization: Bearer {{adminToken}}
+
+### 6. Create public dine-in order
+POST {{baseUrl}}/api/public/orders
+Content-Type: application/json
+
+{
+  "order_type": "dine_in",
+  "table_id": 1,
+  "customer_name": "Budi",
+  "customer_phone": "08123456789",
+  "items": [
+    {
+      "menu_id": 1,
+      "quantity": 2,
+      "note": "tidak terlalu pedas"
+    }
+  ],
+  "payment_method": "qris_manual"
+}
+
+### Update @orderCode and @orderId from the create-order response before continuing.
+
+### 7. Upload payment proof as URL string
+POST {{baseUrl}}/api/public/orders/{{orderCode}}/upload-payment-proof
+Content-Type: application/json
+
+{
+  "image_url": "https://example.com/payment-proof.jpg"
+}
+
+### Optional: Upload payment proof as a local file
+# POST {{baseUrl}}/api/public/orders/{{orderCode}}/upload-payment-proof-file
+# Content-Type: multipart/form-data; boundary=Boundary
+#
+# --Boundary
+# Content-Disposition: form-data; name="image"; filename="payment-proof.jpg"
+# Content-Type: image/jpeg
+#
+# < ./payment-proof.jpg
+# --Boundary--
+
+### 8. Confirm payment as cashier
+PATCH {{baseUrl}}/api/cashier/orders/{{orderId}}/confirm-payment
+Authorization: Bearer {{cashierToken}}
+
+### 9. Mark order cooking as kitchen
+PATCH {{baseUrl}}/api/kitchen/orders/{{orderId}}/cooking
+Authorization: Bearer {{kitchenToken}}
+
+### 10. Mark order ready as kitchen
+PATCH {{baseUrl}}/api/kitchen/orders/{{orderId}}/ready
+Authorization: Bearer {{kitchenToken}}
+
+### 11. Complete order as cashier
+PATCH {{baseUrl}}/api/cashier/orders/{{orderId}}/complete
+Authorization: Bearer {{cashierToken}}
+

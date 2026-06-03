@@ -1,0 +1,7 @@
+.env
+*.exe
+*.out
+uploads/menus/*
+!uploads/menus/.gitkeep
+uploads/payments/*
+!uploads/payments/.gitkeep
