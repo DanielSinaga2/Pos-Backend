@@ -5,6 +5,7 @@ import (
 	"pos-backend/handlers"
 	"pos-backend/middleware"
 	"pos-backend/models"
+	"pos-backend/services"
 	"pos-backend/utils"
 	realtime "pos-backend/websocket"
 
@@ -30,6 +31,14 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 
 	jwtAuth := middleware.JWTAuth(cfg.JWTSecret)
 	adminOnly := middleware.AllowRoles(models.RoleAdmin)
+
+	userHandler := handlers.NewUserHandler(db)
+	users := api.Group("/users", jwtAuth, adminOnly)
+	users.Get("/", userHandler.List)
+	users.Get("/:id", userHandler.Get)
+	users.Post("/", userHandler.Create)
+	users.Put("/:id", userHandler.Update)
+	users.Delete("/:id", userHandler.Delete)
 
 	categoryHandler := handlers.NewCategoryHandler(db)
 	categories := api.Group("/categories", jwtAuth)
@@ -87,6 +96,13 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	cashier.Patch("/orders/:id/cancel", cashierHandler.CancelOrder)
 	cashier.Patch("/orders/:id/complete", cashierHandler.CompleteOrder)
 	cashier.Get("/payments/waiting-confirmation", cashierHandler.ListWaitingPayments)
+
+	midtransHandler := handlers.NewMidtransPaymentHandler(db, services.NewMidtransService(cfg))
+	payments := api.Group("/payments")
+	payments.Post("/midtrans/notification", midtransHandler.Notification)
+	payments.Post("/midtrans/create-snap/:order_id", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.CreateSnap)
+	payments.Post("/midtrans/sync/:order_code", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.SyncStatus)
+	payments.Get("/midtrans/status/:order_code", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.Status)
 
 	kitchenHandler := handlers.NewKitchenHandler(db)
 	kitchen := api.Group("/kitchen", jwtAuth, middleware.AllowRoles(models.RoleKitchen, models.RoleAdmin))

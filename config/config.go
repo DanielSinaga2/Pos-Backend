@@ -9,15 +9,19 @@ import (
 )
 
 type Config struct {
-	AppPort     string
-	DBHost      string
-	DBPort      string
-	DBUser      string
-	DBPassword  string
-	DBName      string
-	JWTSecret   string
-	FrontendURL string
-	RunSeeder   bool
+	AppPort                  string
+	DBHost                   string
+	DBPort                   string
+	DBUser                   string
+	DBPassword               string
+	DBName                   string
+	JWTSecret                string
+	FrontendURL              string
+	RunSeeder                bool
+	MidtransServerKey        string
+	MidtransClientKey        string
+	MidtransIsProduction     bool
+	FrontendPaymentFinishURL string
 }
 
 func Load() (*Config, error) {
@@ -28,16 +32,25 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RUN_SEEDER must be true or false")
 	}
 
+	midtransIsProduction, err := strconv.ParseBool(getEnv("MIDTRANS_IS_PRODUCTION", "false"))
+	if err != nil {
+		return nil, fmt.Errorf("MIDTRANS_IS_PRODUCTION must be true or false")
+	}
+
 	cfg := &Config{
-		AppPort:     getEnv("APP_PORT", "8080"),
-		DBHost:      getEnv("DB_HOST", "localhost"),
-		DBPort:      getEnv("DB_PORT", "5432"),
-		DBUser:      getEnv("DB_USER", "postgres"),
-		DBPassword:  os.Getenv("DB_PASSWORD"),
-		DBName:      getEnv("DB_NAME", "pos_restaurant"),
-		JWTSecret:   os.Getenv("JWT_SECRET"),
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
-		RunSeeder:   runSeeder,
+		AppPort:                  getEnv("APP_PORT", "8080"),
+		DBHost:                   getEnv("DB_HOST", "localhost"),
+		DBPort:                   getEnv("DB_PORT", "5432"),
+		DBUser:                   getEnv("DB_USER", "postgres"),
+		DBPassword:               os.Getenv("DB_PASSWORD"),
+		DBName:                   getEnv("DB_NAME", "pos_restaurant"),
+		JWTSecret:                os.Getenv("JWT_SECRET"),
+		FrontendURL:              getEnv("FRONTEND_URL", "http://localhost:3000"),
+		RunSeeder:                runSeeder,
+		MidtransServerKey:        os.Getenv("MIDTRANS_SERVER_KEY"),
+		MidtransClientKey:        os.Getenv("MIDTRANS_CLIENT_KEY"),
+		MidtransIsProduction:     midtransIsProduction,
+		FrontendPaymentFinishURL: getEnv("FRONTEND_PAYMENT_FINISH_URL", "http://localhost:3000/payment/finish"),
 	}
 
 	if cfg.JWTSecret == "" {

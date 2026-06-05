@@ -43,6 +43,10 @@ DB_NAME=restaurant_pos
 JWT_SECRET=your_secret_key
 FRONTEND_URL=http://localhost:3000
 RUN_SEEDER=true
+MIDTRANS_SERVER_KEY=
+MIDTRANS_CLIENT_KEY=
+MIDTRANS_IS_PRODUCTION=false
+FRONTEND_PAYMENT_FINISH_URL=http://localhost:3000/payment/finish
 ```
 
 Gunakan `RUN_SEEDER=true` untuk membuat data awal secara otomatis saat startup. Seeder bersifat idempoten dan tidak membuat duplikat jika aplikasi dijalankan berkali-kali. Setelah bootstrap awal, nilainya dapat diubah menjadi `false`.
@@ -94,6 +98,16 @@ GET    /api/categories/:id
 POST   /api/categories
 PUT    /api/categories/:id
 DELETE /api/categories/:id
+```
+
+### Users
+
+```text
+GET    /api/users
+GET    /api/users/:id
+POST   /api/users
+PUT    /api/users/:id
+DELETE /api/users/:id
 ```
 
 ### Menus
@@ -154,6 +168,27 @@ PATCH /api/cashier/orders/:id/complete
 GET   /api/cashier/payments/waiting-confirmation
 ```
 
+### Midtrans Snap
+
+```text
+POST /api/payments/midtrans/create-snap/:order_id
+POST /api/payments/midtrans/notification
+POST /api/payments/midtrans/sync/:order_code
+GET  /api/payments/midtrans/status/:order_code
+```
+
+`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris_manual` atau `transfer`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
+
+`POST /api/payments/midtrans/notification` adalah webhook public dari Midtrans. Untuk testing localhost, gunakan ngrok atau deploy backend agar URL webhook dapat diakses dari dashboard Midtrans Sandbox. Gunakan `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox.
+
+`POST /api/payments/midtrans/sync/:order_code` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini berguna untuk development lokal saat webhook tidak bisa dipakai: backend akan mengecek status transaksi ke Midtrans Transaction Status API, lalu menyinkronkan status order dan payment.
+
+Manual confirm payment tetap tersedia melalui:
+
+```text
+PATCH /api/cashier/orders/:id/confirm-payment
+```
+
 ### Kitchen
 
 ```text
@@ -205,4 +240,3 @@ order_ready
 order_completed
 order_cancelled
 ```
-

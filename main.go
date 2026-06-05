@@ -62,13 +62,14 @@ func main() {
 		},
 	})
 
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     cfg.FrontendURL,
+		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowCredentials: true,
+	}))
 	app.Use(logger.New())
 	app.Use(recover.New())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: cfg.FrontendURL,
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
-		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-	}))
 	app.Static("/uploads", "./uploads")
 
 	routes.Setup(app, db, cfg)
