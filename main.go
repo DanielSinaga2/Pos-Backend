@@ -63,11 +63,14 @@ func main() {
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     cfg.FrontendURL,
+		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowCredentials: true,
 	}))
+	app.Options("/*", func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusNoContent)
+	})
 	app.Use(logger.New())
 	app.Use(recover.New())
 	app.Static("/uploads", "./uploads")

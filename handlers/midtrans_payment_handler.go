@@ -221,13 +221,7 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 
 	switch transactionStatus {
 	case "settlement", "capture":
-		now := time.Now()
-		updates["status"] = models.PaymentPaid
-		updates["paid_at"] = &now
-		if err := tx.Model(payment).Updates(updates).Error; err != nil {
-			return err
-		}
-		return tx.Model(order).Update("status", models.OrderSentToKitchen).Error
+		return markPaymentPaidAndSendOrderToKitchen(tx, payment, order, updates)
 	case "pending":
 		updates["status"] = models.PaymentWaitingConfirmation
 		if err := tx.Model(payment).Updates(updates).Error; err != nil {
@@ -246,6 +240,23 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 	default:
 		return tx.Model(payment).Updates(updates).Error
 	}
+}
+
+func markPaymentPaidAndSendOrderToKitchen(tx *gorm.DB, payment *models.Payment, order *models.Order, paymentUpdates map[string]any) error {
+	now := time.Now()
+	paymentUpdates["status"] = models.PaymentPaid
+	paymentUpdates["paid_at"] = &now
+
+	if err := tx.Model(payment).Updates(paymentUpdates).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(order).Update("status", models.OrderSentToKitchen).Error; err != nil {
+		return err
+	}
+	order.Status = models.OrderSentToKitchen
+	payment.Status = models.PaymentPaid
+	payment.PaidAt = &now
+	return nil
 }
 
 func findMidtransPaymentAndOrder(tx *gorm.DB, orderID string) (models.Payment, models.Order, error) {

@@ -19,7 +19,6 @@ func NewKitchenHandler(db *gorm.DB) *KitchenHandler {
 
 func (h *KitchenHandler) ListOrders(c *fiber.Ctx) error {
 	statuses := []models.OrderStatus{
-		models.OrderPaid,
 		models.OrderSentToKitchen,
 		models.OrderCooking,
 		models.OrderReady,

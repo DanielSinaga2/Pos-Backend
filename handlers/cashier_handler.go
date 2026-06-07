@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"errors"
-	"time"
 
 	"pos-backend/models"
 	"pos-backend/utils"
@@ -80,15 +79,9 @@ func (h *CashierHandler) ConfirmPayment(c *fiber.Ctx) error {
 		if order.Payment.Status == models.PaymentPaid {
 			return &orderServiceError{Status: 409, Message: "payment has already been confirmed"}
 		}
-		now := time.Now()
-		if err := tx.Model(order.Payment).Updates(map[string]any{
-			"status":       models.PaymentPaid,
-			"paid_at":      &now,
+		return markPaymentPaidAndSendOrderToKitchen(tx, order.Payment, &order, map[string]any{
 			"confirmed_by": userID,
-		}).Error; err != nil {
-			return err
-		}
-		return tx.Model(&order).Update("status", models.OrderSentToKitchen).Error
+		})
 	})
 	if err != nil {
 		return orderError(c, err, "failed to confirm payment")
