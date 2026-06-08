@@ -110,10 +110,7 @@ func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
 		if order.Status == models.OrderCompleted {
 			return &orderServiceError{Status: 409, Message: "completed order cannot be cancelled"}
 		}
-		if order.Payment != nil && order.Payment.Status == models.PaymentPaid {
-			return &orderServiceError{Status: 409, Message: "paid order cannot be cancelled without refund"}
-		}
-		if order.Payment != nil {
+		if order.Payment != nil && order.Payment.Status != models.PaymentPaid {
 			if err := tx.Model(order.Payment).Update("status", models.PaymentRejected).Error; err != nil {
 				return err
 			}
@@ -182,5 +179,9 @@ func releaseOrderTable(tx *gorm.DB, order models.Order) error {
 	if order.OrderType != models.OrderDineIn || order.TableID == nil {
 		return nil
 	}
-	return tx.Model(&models.Table{}).Where("id = ?", *order.TableID).Update("status", models.TableAvailable).Error
+	var table models.Table
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&table, *order.TableID).Error; err != nil {
+		return err
+	}
+	return tx.Model(&table).Update("status", models.TableAvailable).Error
 }

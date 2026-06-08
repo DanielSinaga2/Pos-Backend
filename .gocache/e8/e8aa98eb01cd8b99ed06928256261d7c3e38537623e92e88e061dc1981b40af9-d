@@ -1,8 +1,0 @@
-./category.go
-./menu.go
-./order.go
-./order_item.go
-./payment.go
-./qrcode.go
-./table.go
-./user.go

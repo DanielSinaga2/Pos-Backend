@@ -15,11 +15,15 @@ type ReportHandler struct {
 }
 
 type salesSummary struct {
-	TotalOrders     int64 `json:"total_orders"`
-	TotalRevenue    int64 `json:"total_revenue"`
-	TotalCash       int64 `json:"total_cash"`
-	TotalQRISManual int64 `json:"total_qris_manual"`
-	TotalTransfer   int64 `json:"total_transfer"`
+	TotalOrders         int64 `json:"total_orders"`
+	TotalRevenue        int64 `json:"total_revenue"`
+	TotalCash           int64 `json:"total_cash"`
+	TotalQRISManual     int64 `json:"total_qris_manual"`
+	TotalTransfer       int64 `json:"total_transfer"`
+	WaitingPayment      int64 `json:"waiting_payment"`
+	Ready               int64 `json:"ready"`
+	WaitingPaymentCount int64 `json:"waiting_payment_count"`
+	ReadyCount          int64 `json:"ready_count"`
 }
 
 type bestSellingMenu struct {
@@ -29,9 +33,23 @@ type bestSellingMenu struct {
 	TotalRevenue  int64  `json:"total_revenue"`
 }
 
+type salesTrend struct {
+	Date         string `json:"date"`
+	TotalOrders  int64  `json:"total_orders"`
+	TotalRevenue int64  `json:"total_revenue"`
+}
+
+type paymentMethodBreakdown struct {
+	PaymentMethod string `json:"payment_method"`
+	TotalOrders   int64  `json:"total_orders"`
+	TotalRevenue  int64  `json:"total_revenue"`
+}
+
 type salesReportResponse struct {
 	salesSummary
-	BestSellingMenus []bestSellingMenu `json:"best_selling_menus"`
+	SalesTrend             []salesTrend             `json:"sales_trend"`
+	PaymentMethodBreakdown []paymentMethodBreakdown `json:"payment_method_breakdown"`
+	BestSellingMenus       []bestSellingMenu        `json:"best_selling_menus"`
 }
 
 func NewReportHandler(db *gorm.DB) *ReportHandler {
@@ -44,18 +62,20 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, message)
 	}
 
-	base := h.db.Table("payments").
+	paidAtOrOrderCreatedAt := "COALESCE(payments.paid_at, orders.created_at)"
+
+	paidPaymentsQuery := h.db.Table("payments").
 		Joins("JOIN orders ON orders.id = payments.order_id").
-		Where("payments.status = ? AND orders.status <> ?", models.PaymentPaid, models.OrderCancelled)
+		Where("payments.status = ?", models.PaymentPaid)
 	if startDate != nil {
-		base = base.Where("payments.paid_at >= ?", *startDate)
+		paidPaymentsQuery = paidPaymentsQuery.Where(paidAtOrOrderCreatedAt+" >= ?", *startDate)
 	}
 	if endDate != nil {
-		base = base.Where("payments.paid_at < ?", *endDate)
+		paidPaymentsQuery = paidPaymentsQuery.Where(paidAtOrOrderCreatedAt+" < ?", *endDate)
 	}
 
 	var summary salesSummary
-	if err := base.Select(`
+	if err := paidPaymentsQuery.Select(`
 		COUNT(DISTINCT orders.id) AS total_orders,
 		COALESCE(SUM(payments.amount), 0) AS total_revenue,
 		COALESCE(SUM(CASE WHEN payments.payment_method = 'cash' THEN payments.amount ELSE 0 END), 0) AS total_cash,
@@ -63,6 +83,78 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		COALESCE(SUM(CASE WHEN payments.payment_method = 'transfer' THEN payments.amount ELSE 0 END), 0) AS total_transfer
 	`).Scan(&summary).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate sales report")
+	}
+
+	waitingPaymentQuery := h.db.Table("orders").
+		Joins("LEFT JOIN payments ON payments.order_id = orders.id").
+		Where("(orders.status = ? OR payments.status = ?)", models.OrderPendingPayment, models.PaymentWaitingConfirmation)
+	if startDate != nil {
+		waitingPaymentQuery = waitingPaymentQuery.Where("orders.created_at >= ?", *startDate)
+	}
+	if endDate != nil {
+		waitingPaymentQuery = waitingPaymentQuery.Where("orders.created_at < ?", *endDate)
+	}
+	if err := waitingPaymentQuery.Count(&summary.WaitingPayment).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to count waiting payment orders")
+	}
+	summary.WaitingPaymentCount = summary.WaitingPayment
+
+	readyQuery := h.db.Model(&models.Order{}).Where("status = ?", models.OrderReady)
+	if startDate != nil {
+		readyQuery = readyQuery.Where("created_at >= ?", *startDate)
+	}
+	if endDate != nil {
+		readyQuery = readyQuery.Where("created_at < ?", *endDate)
+	}
+	if err := readyQuery.Count(&summary.Ready).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to count ready orders")
+	}
+	summary.ReadyCount = summary.Ready
+
+	salesTrendQuery := h.db.Table("payments").
+		Select(`
+			TO_CHAR(DATE_TRUNC('day', `+paidAtOrOrderCreatedAt+`), 'YYYY-MM-DD') AS date,
+			COUNT(DISTINCT orders.id) AS total_orders,
+			COALESCE(SUM(payments.amount), 0) AS total_revenue
+		`).
+		Joins("JOIN orders ON orders.id = payments.order_id").
+		Where("payments.status = ?", models.PaymentPaid)
+	if startDate != nil {
+		salesTrendQuery = salesTrendQuery.Where(paidAtOrOrderCreatedAt+" >= ?", *startDate)
+	}
+	if endDate != nil {
+		salesTrendQuery = salesTrendQuery.Where(paidAtOrOrderCreatedAt+" < ?", *endDate)
+	}
+
+	var salesTrendItems []salesTrend
+	if err := salesTrendQuery.
+		Group("DATE_TRUNC('day', " + paidAtOrOrderCreatedAt + ")").
+		Order("DATE_TRUNC('day', " + paidAtOrOrderCreatedAt + ") ASC").
+		Scan(&salesTrendItems).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate sales trend report")
+	}
+
+	paymentMethodQuery := h.db.Table("payments").
+		Select(`
+			payments.payment_method AS payment_method,
+			COUNT(DISTINCT orders.id) AS total_orders,
+			COALESCE(SUM(payments.amount), 0) AS total_revenue
+		`).
+		Joins("JOIN orders ON orders.id = payments.order_id").
+		Where("payments.status = ?", models.PaymentPaid)
+	if startDate != nil {
+		paymentMethodQuery = paymentMethodQuery.Where(paidAtOrOrderCreatedAt+" >= ?", *startDate)
+	}
+	if endDate != nil {
+		paymentMethodQuery = paymentMethodQuery.Where(paidAtOrOrderCreatedAt+" < ?", *endDate)
+	}
+
+	var paymentMethodBreakdownItems []paymentMethodBreakdown
+	if err := paymentMethodQuery.
+		Group("payments.payment_method").
+		Order("payments.payment_method ASC").
+		Scan(&paymentMethodBreakdownItems).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate payment method report")
 	}
 
 	bestSellingQuery := h.db.Table("order_items").
@@ -75,12 +167,12 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		Joins("JOIN menus ON menus.id = order_items.menu_id").
 		Joins("JOIN orders ON orders.id = order_items.order_id").
 		Joins("JOIN payments ON payments.order_id = orders.id").
-		Where("payments.status = ? AND orders.status <> ?", models.PaymentPaid, models.OrderCancelled)
+		Where("payments.status = ?", models.PaymentPaid)
 	if startDate != nil {
-		bestSellingQuery = bestSellingQuery.Where("payments.paid_at >= ?", *startDate)
+		bestSellingQuery = bestSellingQuery.Where(paidAtOrOrderCreatedAt+" >= ?", *startDate)
 	}
 	if endDate != nil {
-		bestSellingQuery = bestSellingQuery.Where("payments.paid_at < ?", *endDate)
+		bestSellingQuery = bestSellingQuery.Where(paidAtOrOrderCreatedAt+" < ?", *endDate)
 	}
 
 	var bestSellingMenus []bestSellingMenu
@@ -92,8 +184,10 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate best selling menu report")
 	}
 	return utils.Success(c, fiber.StatusOK, "sales report retrieved successfully", salesReportResponse{
-		salesSummary:     summary,
-		BestSellingMenus: bestSellingMenus,
+		salesSummary:           summary,
+		SalesTrend:             salesTrendItems,
+		PaymentMethodBreakdown: paymentMethodBreakdownItems,
+		BestSellingMenus:       bestSellingMenus,
 	})
 }
 

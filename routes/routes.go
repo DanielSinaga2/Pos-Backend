@@ -94,7 +94,9 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	cashier.Get("/orders/:id", cashierHandler.GetOrder)
 	cashier.Patch("/orders/:id/confirm-payment", cashierHandler.ConfirmPayment)
 	cashier.Patch("/orders/:id/cancel", cashierHandler.CancelOrder)
+	cashier.Post("/orders/:id/cancel", cashierHandler.CancelOrder)
 	cashier.Patch("/orders/:id/complete", cashierHandler.CompleteOrder)
+	cashier.Post("/orders/:id/complete", cashierHandler.CompleteOrder)
 	cashier.Get("/payments/waiting-confirmation", cashierHandler.ListWaitingPayments)
 
 	midtransHandler := handlers.NewMidtransPaymentHandler(db, services.NewMidtransService(cfg))
