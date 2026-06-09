@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"pos-backend/models"
+	"pos-backend/services"
 	"pos-backend/utils"
 
 	"github.com/gofiber/fiber/v2"
@@ -13,15 +14,16 @@ import (
 )
 
 type PublicOrderHandler struct {
-	db *gorm.DB
+	db       *gorm.DB
+	midtrans *services.MidtransService
 }
 
 type uploadPaymentProofRequest struct {
 	ImageURL string `json:"image_url"`
 }
 
-func NewPublicOrderHandler(db *gorm.DB) *PublicOrderHandler {
-	return &PublicOrderHandler{db: db}
+func NewPublicOrderHandler(db *gorm.DB, midtrans *services.MidtransService) *PublicOrderHandler {
+	return &PublicOrderHandler{db: db, midtrans: midtrans}
 }
 
 func (h *PublicOrderHandler) Create(c *fiber.Ctx) error {
@@ -50,6 +52,56 @@ func (h *PublicOrderHandler) Get(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get order")
 	}
 	return utils.Success(c, fiber.StatusOK, "order retrieved successfully", order)
+}
+
+func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
+	orderCode := strings.TrimSpace(c.Params("order_code"))
+	if orderCode == "" {
+		return utils.Error(c, fiber.StatusBadRequest, "order_code is required")
+	}
+
+	var order models.Order
+	if err := h.db.Preload("Items.Menu").Preload("Payment").Where("order_code = ?", orderCode).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.Error(c, fiber.StatusNotFound, "order not found")
+		}
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to get order")
+	}
+	if order.Payment == nil {
+		return utils.Error(c, fiber.StatusNotFound, "payment not found")
+	}
+	if order.Payment.PaymentMethod == models.PaymentCash {
+		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
+	}
+	if order.Payment.Status == models.PaymentPaid {
+		return utils.Error(c, fiber.StatusConflict, "payment already paid")
+	}
+	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
+		return utils.Success(c, fiber.StatusOK, "snap created successfully", fiber.Map{
+			"order_code":        order.OrderCode,
+			"snap_token":        *order.Payment.SnapToken,
+			"snap_redirect_url": stringValue(order.Payment.SnapRedirectURL),
+		})
+	}
+
+	snapResponse, err := h.midtrans.CreateSnapTransaction(order, *order.Payment)
+	if err != nil {
+		return utils.Error(c, fiber.StatusBadGateway, "failed to create snap token")
+	}
+
+	if err := h.db.Model(order.Payment).Updates(map[string]any{
+		"midtrans_order_id": order.OrderCode,
+		"snap_token":        snapResponse.Token,
+		"snap_redirect_url": snapResponse.RedirectURL,
+	}).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
+	}
+
+	return utils.Success(c, fiber.StatusOK, "snap created successfully", fiber.Map{
+		"order_code":        order.OrderCode,
+		"snap_token":        snapResponse.Token,
+		"snap_redirect_url": snapResponse.RedirectURL,
+	})
 }
 
 func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {

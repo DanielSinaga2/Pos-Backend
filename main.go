@@ -63,9 +63,9 @@ func main() {
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000",
+		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000,https://adc2-110-139-126-69.ngrok-free.app",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,ngrok-skip-browser-warning",
 		AllowCredentials: true,
 	}))
 	app.Options("/*", func(c *fiber.Ctx) error {

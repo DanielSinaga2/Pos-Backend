@@ -81,9 +81,12 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	public.Get("/menu/:id", publicHandler.GetMenu)
 	public.Get("/qrcode/:code", publicHandler.GetQRCode)
 
-	publicOrderHandler := handlers.NewPublicOrderHandler(db)
+	midtransService := services.NewMidtransService(cfg)
+
+	publicOrderHandler := handlers.NewPublicOrderHandler(db, midtransService)
 	public.Post("/orders", publicOrderHandler.Create)
 	public.Get("/orders/:order_code", publicOrderHandler.Get)
+	public.Post("/orders/:order_code/create-snap", publicOrderHandler.CreateSnap)
 	public.Post("/orders/:order_code/upload-payment-proof", publicOrderHandler.UploadPaymentProof)
 	public.Post("/orders/:order_code/upload-payment-proof-file", publicOrderHandler.UploadPaymentProofFile)
 
@@ -99,7 +102,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	cashier.Post("/orders/:id/complete", cashierHandler.CompleteOrder)
 	cashier.Get("/payments/waiting-confirmation", cashierHandler.ListWaitingPayments)
 
-	midtransHandler := handlers.NewMidtransPaymentHandler(db, services.NewMidtransService(cfg))
+	midtransHandler := handlers.NewMidtransPaymentHandler(db, midtransService)
 	payments := api.Group("/payments")
 	payments.Post("/midtrans/notification", midtransHandler.Notification)
 	payments.Post("/midtrans/create-snap/:order_id", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.CreateSnap)
