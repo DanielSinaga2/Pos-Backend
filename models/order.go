@@ -27,7 +27,7 @@ type Order struct {
 	OrderCode     string      `gorm:"size:50;uniqueIndex;not null" json:"order_code"`
 	OrderType     OrderType   `gorm:"type:varchar(20);not null;check:order_type IN ('dine_in','take_away','cashier')" json:"order_type"`
 	TableID       *uint       `gorm:"index" json:"table_id"`
-	Table         *Table      `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"table,omitempty"`
+	Table         *Table      `gorm:"foreignKey:TableID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"table,omitempty"`
 	CustomerName  string      `gorm:"size:150" json:"customer_name,omitempty"`
 	CustomerPhone string      `gorm:"size:30" json:"customer_phone,omitempty"`
 	TotalAmount   int64       `gorm:"not null;check:total_amount >= 0" json:"total_amount"`

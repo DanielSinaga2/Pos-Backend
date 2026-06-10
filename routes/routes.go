@@ -87,6 +87,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	public.Post("/orders", publicOrderHandler.Create)
 	public.Get("/orders/:order_code", publicOrderHandler.Get)
 	public.Post("/orders/:order_code/create-snap", publicOrderHandler.CreateSnap)
+	public.Post("/orders/:order_code/sync-payment", publicOrderHandler.SyncPayment)
 	public.Post("/orders/:order_code/upload-payment-proof", publicOrderHandler.UploadPaymentProof)
 	public.Post("/orders/:order_code/upload-payment-proof-file", publicOrderHandler.UploadPaymentProofFile)
 

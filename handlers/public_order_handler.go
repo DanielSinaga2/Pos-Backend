@@ -73,10 +73,18 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
 	}
+	if order.Payment.PaymentMethod != models.PaymentQRIS {
+		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris")
+	}
 	if order.Payment.Status == models.PaymentPaid {
 		return utils.Error(c, fiber.StatusConflict, "payment already paid")
 	}
 	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
+		if order.Payment.PaymentType == nil || strings.TrimSpace(*order.Payment.PaymentType) == "" {
+			if err := h.db.Model(order.Payment).Update("payment_type", "qris").Error; err != nil {
+				return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
+			}
+		}
 		return utils.Success(c, fiber.StatusOK, "snap created successfully", fiber.Map{
 			"order_code":        order.OrderCode,
 			"snap_token":        *order.Payment.SnapToken,
@@ -93,6 +101,7 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 		"midtrans_order_id": order.OrderCode,
 		"snap_token":        snapResponse.Token,
 		"snap_redirect_url": snapResponse.RedirectURL,
+		"payment_type":      "qris",
 	}).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
 	}
@@ -102,6 +111,20 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 		"snap_token":        snapResponse.Token,
 		"snap_redirect_url": snapResponse.RedirectURL,
 	})
+}
+
+func (h *PublicOrderHandler) SyncPayment(c *fiber.Ctx) error {
+	orderCode := strings.TrimSpace(c.Params("order_code"))
+	if orderCode == "" {
+		return utils.Error(c, fiber.StatusBadRequest, "order_code is required")
+	}
+
+	order, err := syncMidtransPaymentByOrderCode(h.db, h.midtrans, orderCode)
+	if err != nil {
+		return orderError(c, err, "failed to sync payment")
+	}
+	broadcastMidtransPaymentUpdate(order)
+	return utils.Success(c, fiber.StatusOK, "payment synced successfully", order)
 }
 
 func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {

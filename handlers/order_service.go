@@ -46,17 +46,7 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 	var order models.Order
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if request.OrderType == models.OrderDineIn {
-			var table models.Table
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&table, *request.TableID).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return &orderServiceError{Status: 404, Message: "table not found"}
-				}
-				return err
-			}
-			if table.Status != models.TableAvailable {
-				return &orderServiceError{Status: 409, Message: "table is not available"}
-			}
-			if err := tx.Model(&table).Update("status", models.TableOccupied).Error; err != nil {
+			if err := occupyTableForDineInOrder(tx, *request.TableID); err != nil {
 				return err
 			}
 		}
@@ -109,6 +99,25 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 	return findOrder(db, order.ID)
 }
 
+func occupyTableForDineInOrder(tx *gorm.DB, tableID uint) error {
+	var table models.Table
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&table, tableID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &orderServiceError{Status: 404, Message: "table not found"}
+		}
+		return err
+	}
+
+	switch table.Status {
+	case models.TableAvailable:
+		return tx.Model(&table).Update("status", models.TableOccupied).Error
+	case models.TableOccupied:
+		return &orderServiceError{Status: 409, Message: "table is not available"}
+	default:
+		return &orderServiceError{Status: 409, Message: "table is not available"}
+	}
+}
+
 func validateCreateOrderRequest(request createOrderRequest, public bool) string {
 	if public && request.OrderType != models.OrderDineIn && request.OrderType != models.OrderTakeAway {
 		return "order_type must be dine_in or take_away"
@@ -139,8 +148,11 @@ func validateCreateOrderRequest(request createOrderRequest, public bool) string 
 			return "quantity must be at least 1"
 		}
 	}
-	if !isValidPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash, qris_manual, or transfer"
+	if public && !isValidPublicPaymentMethod(request.PaymentMethod) {
+		return "payment_method must be cash or qris"
+	}
+	if !public && !isValidCashierPaymentMethod(request.PaymentMethod) {
+		return "payment_method must be cash, qris, qris_manual, or transfer"
 	}
 	return ""
 }
@@ -205,6 +217,13 @@ func preloadOrder(db *gorm.DB) *gorm.DB {
 		Preload("Payment.Confirmer")
 }
 
-func isValidPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash || method == models.PaymentQRISManual || method == models.PaymentTransfer
+func isValidPublicPaymentMethod(method models.PaymentMethod) bool {
+	return method == models.PaymentCash || method == models.PaymentQRIS
+}
+
+func isValidCashierPaymentMethod(method models.PaymentMethod) bool {
+	return method == models.PaymentCash ||
+		method == models.PaymentQRIS ||
+		method == models.PaymentQRISManual ||
+		method == models.PaymentTransfer
 }

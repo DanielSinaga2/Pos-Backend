@@ -84,7 +84,10 @@ func (s *MidtransService) CreateSnapTransaction(order models.Order, payment mode
 		return SnapResponse{}, errors.New("MIDTRANS_SERVER_KEY is required")
 	}
 
-	payload := s.buildSnapPayload(order, payment)
+	payload, err := s.buildSnapPayload(order, payment)
+	if err != nil {
+		return SnapResponse{}, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return SnapResponse{}, err
@@ -162,7 +165,11 @@ func (s *MidtransService) VerifyNotification(payload NotificationPayload) bool {
 	return strings.EqualFold(hex.EncodeToString(sum[:]), payload.SignatureKey)
 }
 
-func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Payment) map[string]any {
+func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Payment) (map[string]any, error) {
+	if order.TotalAmount <= 0 {
+		return nil, errors.New("gross_amount must be positive")
+	}
+
 	itemDetails := make([]map[string]any, 0, len(order.Items))
 	for _, item := range order.Items {
 		name := item.Menu.Name
@@ -178,24 +185,37 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 		})
 	}
 
+	enabledPayments := enabledPaymentsFor(payment.PaymentMethod)
+
+	customerName := strings.TrimSpace(order.CustomerName)
+	if customerName == "" {
+		customerName = order.OrderCode
+	}
+	customerDetails := map[string]any{
+		"first_name": customerName,
+	}
+	if customerPhone := strings.TrimSpace(order.CustomerPhone); customerPhone != "" {
+		customerDetails["phone"] = customerPhone
+	}
+
 	return map[string]any{
 		"transaction_details": map[string]any{
 			"order_id":     order.OrderCode,
 			"gross_amount": order.TotalAmount,
 		},
-		"customer_details": map[string]any{
-			"first_name": order.CustomerName,
-			"phone":      order.CustomerPhone,
-		},
+		"customer_details": customerDetails,
 		"callbacks": map[string]any{
 			"finish": s.finishURL,
 		},
-		"enabled_payments": []string{
-			"qris",
-			"bank_transfer",
-			"gopay",
-			"shopeepay",
-		},
-		"item_details": itemDetails,
+		"enabled_payments": enabledPayments,
+		"item_details":     itemDetails,
+	}, nil
+}
+
+func enabledPaymentsFor(method models.PaymentMethod) []string {
+	if method == models.PaymentTransfer {
+		return []string{"bank_transfer"}
 	}
+
+	return []string{"gopay", "shopeepay"}
 }

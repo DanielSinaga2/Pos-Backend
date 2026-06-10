@@ -40,6 +40,12 @@ func main() {
 	); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
+	if err := database.EnsurePaymentMethodConstraint(db); err != nil {
+		log.Fatalf("migrate payment method constraint: %v", err)
+	}
+	if err := database.EnsurePaymentStatusConstraint(db); err != nil {
+		log.Fatalf("migrate payment status constraint: %v", err)
+	}
 
 	if cfg.RunSeeder {
 		if err := seeders.Run(db); err != nil {
@@ -63,7 +69,7 @@ func main() {
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000,https://adc2-110-139-126-69.ngrok-free.app",
+		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000,https://ef38-180-245-29-85.ngrok-free.app",
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,ngrok-skip-browser-warning",
 		AllowCredentials: true,

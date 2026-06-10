@@ -26,3 +26,49 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 
 	return db, nil
 }
+
+func EnsurePaymentMethodConstraint(db *gorm.DB) error {
+	return db.Exec(`
+DO $$
+DECLARE
+	constraint_record RECORD;
+BEGIN
+	FOR constraint_record IN
+		SELECT conname
+		FROM pg_constraint
+		WHERE conrelid = 'payments'::regclass
+			AND contype = 'c'
+			AND pg_get_constraintdef(oid) ILIKE '%payment_method%'
+	LOOP
+		EXECUTE format('ALTER TABLE payments DROP CONSTRAINT IF EXISTS %I', constraint_record.conname);
+	END LOOP;
+
+	ALTER TABLE payments
+		ADD CONSTRAINT chk_payments_payment_method
+		CHECK (payment_method IN ('cash','qris','qris_manual','transfer'));
+END $$;
+`).Error
+}
+
+func EnsurePaymentStatusConstraint(db *gorm.DB) error {
+	return db.Exec(`
+DO $$
+DECLARE
+	constraint_record RECORD;
+BEGIN
+	FOR constraint_record IN
+		SELECT conname
+		FROM pg_constraint
+		WHERE conrelid = 'payments'::regclass
+			AND contype = 'c'
+			AND pg_get_constraintdef(oid) ILIKE '%status%'
+	LOOP
+		EXECUTE format('ALTER TABLE payments DROP CONSTRAINT IF EXISTS %I', constraint_record.conname);
+	END LOOP;
+
+	ALTER TABLE payments
+		ADD CONSTRAINT chk_payments_status
+		CHECK (status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed'));
+END $$;
+`).Error
+}

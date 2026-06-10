@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -49,10 +50,11 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 	}
 	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
 		return utils.Success(c, fiber.StatusOK, "snap token already exists", fiber.Map{
-			"order_id":     order.ID,
-			"order_code":   order.OrderCode,
-			"snap_token":   *order.Payment.SnapToken,
-			"redirect_url": stringValue(order.Payment.SnapRedirectURL),
+			"order_id":          order.ID,
+			"order_code":        order.OrderCode,
+			"snap_token":        *order.Payment.SnapToken,
+			"redirect_url":      stringValue(order.Payment.SnapRedirectURL),
+			"snap_redirect_url": stringValue(order.Payment.SnapRedirectURL),
 		})
 	}
 
@@ -65,29 +67,42 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 		"midtrans_order_id": order.OrderCode,
 		"snap_token":        snapResponse.Token,
 		"snap_redirect_url": snapResponse.RedirectURL,
+		"payment_type":      midtransPaymentType(order.Payment.PaymentMethod),
 	}).Error
 	if err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
 	}
 
 	return utils.Success(c, fiber.StatusOK, "snap token created", fiber.Map{
-		"order_id":     order.ID,
-		"order_code":   order.OrderCode,
-		"snap_token":   snapResponse.Token,
-		"redirect_url": snapResponse.RedirectURL,
+		"order_id":          order.ID,
+		"order_code":        order.OrderCode,
+		"snap_token":        snapResponse.Token,
+		"redirect_url":      snapResponse.RedirectURL,
+		"snap_redirect_url": snapResponse.RedirectURL,
 	})
 }
 
 func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) error {
 	var payload services.NotificationPayload
 	if err := c.BodyParser(&payload); err != nil {
-		return utils.Error(c, fiber.StatusBadRequest, "invalid notification payload")
+		log.Printf("midtrans notification invalid payload: %v", err)
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"success": false,
+			"message": "invalid notification payload",
+		})
 	}
 	if strings.TrimSpace(payload.OrderID) == "" {
-		return utils.Error(c, fiber.StatusBadRequest, "order_id is required")
+		log.Print("midtrans notification ignored: order_id is required")
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"success": false,
+			"message": "order_id is required",
+		})
 	}
 	if strings.HasPrefix(payload.OrderID, "payment_notif_test_") {
-		return utils.Success(c, fiber.StatusOK, "midtrans test notification accepted", nil)
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"success": true,
+			"message": "midtrans test notification received",
+		})
 	}
 
 	var processedOrderCode string
@@ -113,25 +128,21 @@ func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) error {
 	})
 	if err != nil {
 		if errors.Is(err, errMidtransOrderNotFound) {
-			return utils.Success(c, fiber.StatusOK, "notification ignored: order not found", nil)
+			log.Printf("midtrans notification ignored: order/payment not found for order_id %s", payload.OrderID)
+			return utils.Success(c, fiber.StatusOK, "notification ignored: order/payment not found", nil)
 		}
 		var serviceError *orderServiceError
 		if errors.As(err, &serviceError) {
-			return utils.Error(c, serviceError.Status, serviceError.Message)
+			log.Printf("midtrans notification ignored for order_id %s: %s", payload.OrderID, serviceError.Message)
+			return utils.Success(c, fiber.StatusOK, serviceError.Message, nil)
 		}
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to process notification")
+		log.Printf("midtrans notification failed for order_id %s: %v", payload.OrderID, err)
+		return utils.Success(c, fiber.StatusOK, "notification received", nil)
 	}
 
 	updatedOrder, err := findOrderByCode(h.db, processedOrderCode)
 	if err == nil {
-		switch payload.TransactionStatus {
-		case "settlement", "capture":
-			broadcastPaymentConfirmed(updatedOrder)
-		case "pending":
-			broadcastPaymentWaitingConfirmation(updatedOrder)
-		case "deny", "expire", "cancel":
-			broadcastOrderStatus("order_cancelled", updatedOrder)
-		}
+		broadcastMidtransPaymentUpdate(updatedOrder)
 	}
 
 	return utils.Success(c, fiber.StatusOK, "notification processed", nil)
@@ -143,72 +154,15 @@ func (h *MidtransPaymentHandler) SyncStatus(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, "order_code is required")
 	}
 
-	var order models.Order
-	if err := h.db.Where("order_code = ?", orderCode).First(&order).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return utils.Error(c, fiber.StatusNotFound, "order not found")
-		}
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to get order")
-	}
-
-	var payment models.Payment
-	if err := h.db.Where("order_id = ?", order.ID).First(&payment).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return utils.Error(c, fiber.StatusNotFound, "payment not found")
-		}
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to get payment")
-	}
-	if payment.MidtransOrderID == nil || strings.TrimSpace(*payment.MidtransOrderID) == "" {
-		return utils.Error(c, fiber.StatusBadRequest, "midtrans_order_id is required")
-	}
-
-	statusResponse, err := h.midtrans.GetTransactionStatus(*payment.MidtransOrderID)
+	updatedOrder, err := syncMidtransPaymentByOrderCode(h.db, h.midtrans, orderCode)
 	if err != nil {
-		return utils.Error(c, fiber.StatusBadGateway, "failed to get midtrans status")
+		return orderError(c, err, "failed to sync midtrans status")
 	}
-
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, order.ID).Error; err != nil {
-			return err
-		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ?", order.ID).First(&payment).Error; err != nil {
-			return err
-		}
-		return applyMidtransTransactionStatus(
-			tx,
-			&payment,
-			&order,
-			statusResponse.TransactionStatus,
-			statusResponse.PaymentType,
-			statusResponse.TransactionID,
-			statusResponse.FraudStatus,
-		)
-	})
-	if err != nil {
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to sync midtrans status")
-	}
-
-	updatedOrder, err := findOrderByCode(h.db, orderCode)
-	if err != nil {
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to get updated order")
-	}
-	var updatedPayment models.Payment
-	if err := h.db.Where("order_id = ?", updatedOrder.ID).First(&updatedPayment).Error; err != nil {
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to get updated payment")
-	}
-
-	switch statusResponse.TransactionStatus {
-	case "settlement", "capture":
-		broadcastPaymentConfirmed(updatedOrder)
-	case "pending":
-		broadcastPaymentWaitingConfirmation(updatedOrder)
-	case "deny", "expire", "cancel":
-		broadcastOrderStatus("order_cancelled", updatedOrder)
-	}
+	broadcastMidtransPaymentUpdate(updatedOrder)
 
 	return utils.Success(c, fiber.StatusOK, "midtrans status synced", fiber.Map{
 		"order":   updatedOrder,
-		"payment": updatedPayment,
+		"payment": updatedOrder.Payment,
 	})
 }
 
@@ -223,19 +177,26 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 	case "settlement", "capture":
 		return markPaymentPaidAndSendOrderToKitchen(tx, payment, order, updates)
 	case "pending":
-		updates["status"] = models.PaymentWaitingConfirmation
+		updates["status"] = models.PaymentPending
 		if err := tx.Model(payment).Updates(updates).Error; err != nil {
 			return err
 		}
-		return tx.Model(order).Update("status", models.OrderPendingPayment).Error
-	case "deny", "expire", "cancel":
-		updates["status"] = models.PaymentRejected
+		if err := tx.Model(order).Update("status", models.OrderPendingPayment).Error; err != nil {
+			return err
+		}
+		payment.Status = models.PaymentPending
+		order.Status = models.OrderPendingPayment
+		return nil
+	case "deny", "expire", "cancel", "failure":
+		updates["status"] = models.PaymentFailed
 		if err := tx.Model(payment).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(order).Update("status", models.OrderCancelled).Error; err != nil {
 			return err
 		}
+		payment.Status = models.PaymentFailed
+		order.Status = models.OrderCancelled
 		return releaseOrderTable(tx, *order)
 	default:
 		return tx.Model(payment).Updates(updates).Error
@@ -257,6 +218,71 @@ func markPaymentPaidAndSendOrderToKitchen(tx *gorm.DB, payment *models.Payment, 
 	payment.Status = models.PaymentPaid
 	payment.PaidAt = &now
 	return nil
+}
+
+func syncMidtransPaymentByOrderCode(db *gorm.DB, midtrans *services.MidtransService, orderCode string) (models.Order, error) {
+	var order models.Order
+	if err := db.Preload("Payment").Where("order_code = ?", orderCode).First(&order).Error; err != nil {
+		return models.Order{}, err
+	}
+	if order.Payment == nil {
+		return models.Order{}, &orderServiceError{Status: fiber.StatusNotFound, Message: "payment not found"}
+	}
+	if order.Payment.PaymentMethod == models.PaymentCash {
+		return models.Order{}, &orderServiceError{Status: fiber.StatusBadRequest, Message: "cash payment does not need Midtrans"}
+	}
+
+	midtransOrderID := order.OrderCode
+	if order.Payment.MidtransOrderID != nil && strings.TrimSpace(*order.Payment.MidtransOrderID) != "" {
+		midtransOrderID = strings.TrimSpace(*order.Payment.MidtransOrderID)
+	}
+
+	statusResponse, err := midtrans.GetTransactionStatus(midtransOrderID)
+	if err != nil {
+		return models.Order{}, &orderServiceError{Status: fiber.StatusBadGateway, Message: "failed to get midtrans status"}
+	}
+
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, order.ID).Error; err != nil {
+			return err
+		}
+		var payment models.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ?", order.ID).First(&payment).Error; err != nil {
+			return err
+		}
+		return applyMidtransTransactionStatus(
+			tx,
+			&payment,
+			&order,
+			statusResponse.TransactionStatus,
+			statusResponse.PaymentType,
+			statusResponse.TransactionID,
+			statusResponse.FraudStatus,
+		)
+	})
+	if err != nil {
+		return models.Order{}, err
+	}
+
+	return findOrder(db, order.ID)
+}
+
+func broadcastMidtransPaymentUpdate(order models.Order) {
+	if order.Payment == nil {
+		broadcastOrderStatus("order_updated", order)
+		return
+	}
+
+	switch order.Payment.Status {
+	case models.PaymentPaid:
+		broadcastPaymentConfirmed(order)
+	case models.PaymentPending:
+		broadcastPaymentWaitingConfirmation(order)
+	case models.PaymentFailed:
+		broadcastOrderStatus("order_cancelled", order)
+	default:
+		broadcastOrderStatus("order_updated", order)
+	}
 }
 
 func findMidtransPaymentAndOrder(tx *gorm.DB, orderID string) (models.Payment, models.Order, error) {
@@ -334,4 +360,11 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func midtransPaymentType(method models.PaymentMethod) string {
+	if method == models.PaymentTransfer {
+		return "bank_transfer"
+	}
+	return "qris"
 }

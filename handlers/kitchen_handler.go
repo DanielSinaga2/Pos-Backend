@@ -24,7 +24,13 @@ func (h *KitchenHandler) ListOrders(c *fiber.Ctx) error {
 		models.OrderReady,
 	}
 	var orders []models.Order
-	if err := preloadOrder(h.db).Where("status IN ?", statuses).Order("created_at ASC").Find(&orders).Error; err != nil {
+	if err := h.db.
+		Preload("Table").
+		Preload("Items.Menu").
+		Preload("Payment").
+		Where("status IN ?", statuses).
+		Order("created_at ASC").
+		Find(&orders).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get kitchen orders")
 	}
 	return utils.Success(c, fiber.StatusOK, "kitchen orders retrieved successfully", orders)
