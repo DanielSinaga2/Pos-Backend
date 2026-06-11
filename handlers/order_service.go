@@ -112,7 +112,7 @@ func occupyTableForDineInOrder(tx *gorm.DB, tableID uint) error {
 	case models.TableAvailable:
 		return tx.Model(&table).Update("status", models.TableOccupied).Error
 	case models.TableOccupied:
-		return &orderServiceError{Status: 409, Message: "table is not available"}
+		return nil
 	default:
 		return &orderServiceError{Status: 409, Message: "table is not available"}
 	}

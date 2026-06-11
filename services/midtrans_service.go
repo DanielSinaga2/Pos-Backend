@@ -27,7 +27,7 @@ const (
 
 type MidtransService struct {
 	serverKey     string
-	finishURL     string
+	frontendURL   string
 	snapURL       string
 	statusBaseURL string
 	client        *http.Client
@@ -70,7 +70,7 @@ func NewMidtransService(cfg *config.Config) *MidtransService {
 
 	return &MidtransService{
 		serverKey:     cfg.MidtransServerKey,
-		finishURL:     cfg.FrontendPaymentFinishURL,
+		frontendURL:   cfg.FrontendURL,
 		snapURL:       snapURL,
 		statusBaseURL: statusBaseURL,
 		client: &http.Client{
@@ -186,6 +186,7 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 	}
 
 	enabledPayments := enabledPaymentsFor(payment.PaymentMethod)
+	finishURL := s.customerPaymentFinishURL(order.OrderCode)
 
 	customerName := strings.TrimSpace(order.CustomerName)
 	if customerName == "" {
@@ -204,12 +205,17 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 			"gross_amount": order.TotalAmount,
 		},
 		"customer_details": customerDetails,
+		"finish_url":       finishURL,
 		"callbacks": map[string]any{
-			"finish": s.finishURL,
+			"finish": finishURL,
 		},
 		"enabled_payments": enabledPayments,
 		"item_details":     itemDetails,
 	}, nil
+}
+
+func (s *MidtransService) customerPaymentFinishURL(orderCode string) string {
+	return strings.TrimRight(s.frontendURL, "/") + "/order/payment-return?order_code=" + url.QueryEscape(orderCode)
 }
 
 func enabledPaymentsFor(method models.PaymentMethod) []string {
