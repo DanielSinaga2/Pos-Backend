@@ -9,7 +9,6 @@ import (
 	"pos-backend/models"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var jakartaLocation = time.FixedZone("Asia/Jakarta", 7*60*60)
@@ -45,12 +44,6 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 
 	var order models.Order
 	err := db.Transaction(func(tx *gorm.DB) error {
-		if request.OrderType == models.OrderDineIn {
-			if err := occupyTableForDineInOrder(tx, *request.TableID); err != nil {
-				return err
-			}
-		}
-
 		items, totalAmount, err := buildOrderItems(tx, request.Items)
 		if err != nil {
 			return err
@@ -97,25 +90,6 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 	}
 
 	return findOrder(db, order.ID)
-}
-
-func occupyTableForDineInOrder(tx *gorm.DB, tableID uint) error {
-	var table models.Table
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&table, tableID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &orderServiceError{Status: 404, Message: "table not found"}
-		}
-		return err
-	}
-
-	switch table.Status {
-	case models.TableAvailable:
-		return tx.Model(&table).Update("status", models.TableOccupied).Error
-	case models.TableOccupied:
-		return nil
-	default:
-		return &orderServiceError{Status: 409, Message: "table is not available"}
-	}
 }
 
 func validateCreateOrderRequest(request createOrderRequest, public bool) string {

@@ -82,7 +82,14 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 	})
 }
 
-func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) error {
+func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("midtrans notification recovered from panic: %v", recovered)
+			err = utils.Success(c, fiber.StatusOK, "notification received", nil)
+		}
+	}()
+
 	var payload services.NotificationPayload
 	if err := c.BodyParser(&payload); err != nil {
 		log.Printf("midtrans notification invalid payload: %v", err)
@@ -106,7 +113,7 @@ func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) error {
 	}
 
 	var processedOrderCode string
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.Transaction(func(tx *gorm.DB) error {
 		payment, order, err := findMidtransPaymentAndOrder(tx, payload.OrderID)
 		if err != nil {
 			return err
@@ -128,8 +135,8 @@ func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) error {
 	})
 	if err != nil {
 		if errors.Is(err, errMidtransOrderNotFound) {
-			log.Printf("midtrans notification ignored: order/payment not found for order_id %s", payload.OrderID)
-			return utils.Success(c, fiber.StatusOK, "notification ignored: order/payment not found", nil)
+			log.Printf("order not found: %s", payload.OrderID)
+			return utils.Success(c, fiber.StatusOK, "order not found", nil)
 		}
 		var serviceError *orderServiceError
 		if errors.As(err, &serviceError) {
@@ -187,7 +194,7 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 		payment.Status = models.PaymentPending
 		order.Status = models.OrderPendingPayment
 		return nil
-	case "deny", "expire", "cancel", "failure":
+	case "expire", "deny", "failure":
 		updates["status"] = models.PaymentFailed
 		if err := tx.Model(payment).Updates(updates).Error; err != nil {
 			return err
@@ -197,7 +204,18 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 		}
 		payment.Status = models.PaymentFailed
 		order.Status = models.OrderCancelled
-		return releaseOrderTable(tx, *order)
+		return nil
+	case "cancel":
+		updates["status"] = models.PaymentCancelled
+		if err := tx.Model(payment).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(order).Update("status", models.OrderCancelled).Error; err != nil {
+			return err
+		}
+		payment.Status = models.PaymentCancelled
+		order.Status = models.OrderCancelled
+		return nil
 	default:
 		return tx.Model(payment).Updates(updates).Error
 	}
@@ -278,7 +296,7 @@ func broadcastMidtransPaymentUpdate(order models.Order) {
 		broadcastPaymentConfirmed(order)
 	case models.PaymentPending:
 		broadcastPaymentWaitingConfirmation(order)
-	case models.PaymentFailed:
+	case models.PaymentFailed, models.PaymentCancelled:
 		broadcastOrderStatus("order_cancelled", order)
 	default:
 		broadcastOrderStatus("order_updated", order)

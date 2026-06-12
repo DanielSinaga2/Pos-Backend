@@ -20,6 +20,7 @@ const (
 	PaymentPaid                PaymentStatus = "paid"
 	PaymentRejected            PaymentStatus = "rejected"
 	PaymentFailed              PaymentStatus = "failed"
+	PaymentCancelled           PaymentStatus = "cancelled"
 )
 
 type Payment struct {
@@ -28,7 +29,7 @@ type Payment struct {
 	Order           *Order        `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"order,omitempty"`
 	PaymentMethod   PaymentMethod `gorm:"type:varchar(30);not null;check:payment_method IN ('cash','qris','qris_manual','transfer')" json:"payment_method"`
 	Amount          int64         `gorm:"not null;check:amount >= 0" json:"amount"`
-	Status          PaymentStatus `gorm:"type:varchar(30);not null;index;check:status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed')" json:"status"`
+	Status          PaymentStatus `gorm:"type:varchar(30);not null;index;check:status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed','cancelled')" json:"status"`
 	ProofImageURL   string        `gorm:"size:500" json:"proof_image_url,omitempty"`
 	MidtransOrderID *string       `gorm:"size:100;index" json:"midtrans_order_id,omitempty"`
 	SnapToken       *string       `gorm:"size:255" json:"snap_token,omitempty"`

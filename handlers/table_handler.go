@@ -16,12 +16,12 @@ type TableHandler struct {
 }
 
 type tableRequest struct {
-	TableNumber string             `json:"table_number"`
-	Status      models.TableStatus `json:"status"`
+	TableNumber string `json:"table_number"`
+	Status      string `json:"status"`
 }
 
 type tableStatusRequest struct {
-	Status models.TableStatus `json:"status"`
+	Status string `json:"status"`
 }
 
 func NewTableHandler(db *gorm.DB) *TableHandler {
@@ -57,14 +57,11 @@ func (h *TableHandler) Create(c *fiber.Ctx) error {
 	if request.TableNumber == "" {
 		return utils.Error(c, fiber.StatusBadRequest, "table_number is required")
 	}
-	if request.Status == "" {
-		request.Status = models.TableAvailable
-	}
-	if !isValidTableStatus(request.Status) {
-		return utils.Error(c, fiber.StatusBadRequest, "status must be available, occupied, or reserved")
-	}
 
-	table := models.Table{TableNumber: request.TableNumber, Status: request.Status}
+	table := models.Table{
+		TableNumber: request.TableNumber,
+		Status:      strings.TrimSpace(request.Status),
+	}
 	if err := h.db.Create(&table).Error; err != nil {
 		if isDuplicateKey(err) {
 			return utils.Error(c, fiber.StatusConflict, "table number is already registered")
@@ -87,15 +84,12 @@ func (h *TableHandler) Update(c *fiber.Ctx) error {
 	if request.TableNumber == "" {
 		return utils.Error(c, fiber.StatusBadRequest, "table_number is required")
 	}
-	if !isValidTableStatus(request.Status) {
-		return utils.Error(c, fiber.StatusBadRequest, "status must be available, occupied, or reserved")
-	}
 	table, err := h.find(id)
 	if err != nil {
 		return tableLookupError(c, err)
 	}
 	table.TableNumber = request.TableNumber
-	table.Status = request.Status
+	table.Status = strings.TrimSpace(request.Status)
 	if err := h.db.Save(&table).Error; err != nil {
 		if isDuplicateKey(err) {
 			return utils.Error(c, fiber.StatusConflict, "table number is already registered")
@@ -133,14 +127,14 @@ func (h *TableHandler) UpdateStatus(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 	var request tableStatusRequest
-	if err := c.BodyParser(&request); err != nil || !isValidTableStatus(request.Status) {
-		return utils.Error(c, fiber.StatusBadRequest, "status must be available, occupied, or reserved")
+	if err := c.BodyParser(&request); err != nil {
+		return utils.Error(c, fiber.StatusBadRequest, "invalid request body")
 	}
 	table, err := h.find(id)
 	if err != nil {
 		return tableLookupError(c, err)
 	}
-	table.Status = request.Status
+	table.Status = strings.TrimSpace(request.Status)
 	if err := h.db.Save(&table).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to update table status")
 	}
@@ -151,10 +145,6 @@ func (h *TableHandler) find(id uint) (models.Table, error) {
 	var table models.Table
 	err := h.db.First(&table, id).Error
 	return table, err
-}
-
-func isValidTableStatus(status models.TableStatus) bool {
-	return status == models.TableAvailable || status == models.TableOccupied || status == models.TableReserved
 }
 
 func tableLookupError(c *fiber.Ctx, err error) error {

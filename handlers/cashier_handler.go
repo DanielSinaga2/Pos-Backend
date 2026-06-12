@@ -118,7 +118,7 @@ func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
 		if err := tx.Model(&order).Update("status", models.OrderCancelled).Error; err != nil {
 			return err
 		}
-		return releaseOrderTable(tx, order)
+		return nil
 	})
 	if err != nil {
 		return orderError(c, err, "failed to cancel order")
@@ -147,7 +147,7 @@ func (h *CashierHandler) CompleteOrder(c *fiber.Ctx) error {
 		if err := tx.Model(&order).Update("status", models.OrderCompleted).Error; err != nil {
 			return err
 		}
-		return releaseOrderTable(tx, order)
+		return nil
 	})
 	if err != nil {
 		return orderError(c, err, "failed to complete order")
@@ -173,15 +173,4 @@ func (h *CashierHandler) ListWaitingPayments(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get waiting payments")
 	}
 	return utils.Success(c, fiber.StatusOK, "waiting payments retrieved successfully", payments)
-}
-
-func releaseOrderTable(tx *gorm.DB, order models.Order) error {
-	if order.OrderType != models.OrderDineIn || order.TableID == nil {
-		return nil
-	}
-	var table models.Table
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&table, *order.TableID).Error; err != nil {
-		return err
-	}
-	return tx.Model(&table).Update("status", models.TableAvailable).Error
 }

@@ -68,7 +68,29 @@ BEGIN
 
 	ALTER TABLE payments
 		ADD CONSTRAINT chk_payments_status
-		CHECK (status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed'));
+		CHECK (status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed','cancelled'));
+END $$;
+`).Error
+}
+
+func EnsureTableStatusIsOptional(db *gorm.DB) error {
+	return db.Exec(`
+DO $$
+DECLARE
+	constraint_record RECORD;
+BEGIN
+	FOR constraint_record IN
+		SELECT conname
+		FROM pg_constraint
+		WHERE conrelid = 'restaurant_tables'::regclass
+			AND contype = 'c'
+			AND pg_get_constraintdef(oid) ILIKE '%status%'
+	LOOP
+		EXECUTE format('ALTER TABLE restaurant_tables DROP CONSTRAINT IF EXISTS %I', constraint_record.conname);
+	END LOOP;
+
+	ALTER TABLE restaurant_tables ALTER COLUMN status DROP NOT NULL;
+	ALTER TABLE restaurant_tables ALTER COLUMN status DROP DEFAULT;
 END $$;
 `).Error
 }

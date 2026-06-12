@@ -13,7 +13,6 @@ func seedTables(db *gorm.DB) ([]models.Table, error) {
 	for number := 1; number <= 20; number++ {
 		table := models.Table{
 			TableNumber: fmt.Sprintf("Meja %d", number),
-			Status:      models.TableAvailable,
 		}
 		if err := db.Where("table_number = ?", table.TableNumber).FirstOrCreate(&table).Error; err != nil {
 			return nil, fmt.Errorf("create table %s: %w", table.TableNumber, err)
