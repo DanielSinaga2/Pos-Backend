@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log"
+	"strings"
 
 	"pos-backend/config"
 	"pos-backend/database"
@@ -72,14 +73,25 @@ func main() {
 	})
 
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000,http://127.0.0.1:3000,https://5f71-180-245-29-85.ngrok-free.appe",
+		AllowOrigins:     cfg.CorsAllowedOrigins,
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,ngrok-skip-browser-warning",
 		AllowCredentials: true,
+		AllowOriginsFunc: func(origin string) bool {
+			if origin == "" {
+				return true
+			}
+			for _, allowedOrigin := range strings.Split(cfg.CorsAllowedOrigins, ",") {
+				if strings.TrimSpace(allowedOrigin) == origin {
+					return true
+				}
+			}
+			return strings.HasPrefix(origin, "http://localhost:") ||
+				strings.HasPrefix(origin, "http://127.0.0.1:") ||
+				strings.HasSuffix(origin, ".ngrok-free.app")
+		},
 	}))
-	app.Options("/*", func(c *fiber.Ctx) error {
-		return c.SendStatus(fiber.StatusNoContent)
-	})
+
 	app.Use(logger.New())
 	app.Use(recover.New())
 	app.Static("/uploads", "./uploads")

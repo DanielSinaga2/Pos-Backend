@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"time"
+
 	"pos-backend/models"
 	"pos-backend/utils"
 
@@ -23,13 +25,19 @@ func (h *KitchenHandler) ListOrders(c *fiber.Ctx) error {
 		models.OrderCooking,
 		models.OrderReady,
 	}
+
+	startOfDay, endOfDay := todayRangeWIB()
+
 	var orders []models.Order
 	if err := h.db.
 		Preload("Table").
 		Preload("Items.Menu").
 		Preload("Payment").
-		Where("status IN ?", statuses).
-		Order("created_at ASC").
+		Joins("JOIN payments ON payments.order_id = orders.id").
+		Where("orders.status IN ?", statuses).
+		Where("payments.status = ?", models.PaymentPaid).
+		Where("orders.created_at >= ? AND orders.created_at < ?", startOfDay, endOfDay).
+		Order("orders.created_at ASC").
 		Find(&orders).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get kitchen orders")
 	}
@@ -42,6 +50,10 @@ func (h *KitchenHandler) StartCooking(c *fiber.Ctx) error {
 
 func (h *KitchenHandler) MarkReady(c *fiber.Ctx) error {
 	return h.updateStatus(c, models.OrderCooking, models.OrderReady, "order is ready")
+}
+
+func (h *KitchenHandler) CompleteOrder(c *fiber.Ctx) error {
+	return h.updateStatus(c, models.OrderReady, models.OrderCompleted, "order completed successfully")
 }
 
 func (h *KitchenHandler) updateStatus(c *fiber.Ctx, expected, next models.OrderStatus, message string) error {
@@ -70,6 +82,16 @@ func (h *KitchenHandler) updateStatus(c *fiber.Ctx, expected, next models.OrderS
 	if next == models.OrderReady {
 		event = "order_ready"
 	}
+	if next == models.OrderCompleted {
+		event = "order_completed"
+	}
 	broadcastOrderStatus(event, order)
 	return utils.Success(c, fiber.StatusOK, message, order)
+}
+
+func todayRangeWIB() (time.Time, time.Time) {
+	location := jakartaLocation
+	now := time.Now().In(location)
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, location)
+	return startOfDay, startOfDay.AddDate(0, 0, 1)
 }

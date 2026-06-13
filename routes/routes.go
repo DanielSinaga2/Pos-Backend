@@ -117,6 +117,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	kitchen.Post("/orders/:id/cooking", kitchenHandler.StartCooking)
 	kitchen.Patch("/orders/:id/ready", kitchenHandler.MarkReady)
 	kitchen.Post("/orders/:id/ready", kitchenHandler.MarkReady)
+	kitchen.Post("/orders/:id/complete", kitchenHandler.CompleteOrder)
 
 	reportHandler := handlers.NewReportHandler(db)
 	admin := api.Group("/admin", jwtAuth, adminOnly)

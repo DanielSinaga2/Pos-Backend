@@ -53,6 +53,26 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 			return err
 		}
 
+		orderStatus := models.OrderPendingPayment
+		paymentStatus := models.PaymentWaitingConfirmation
+		var paidAt *time.Time
+		var confirmedBy *uint
+
+		if request.PaymentMethod == models.PaymentCash {
+			if public {
+				// Customer QR + CASH: tetap menunggu validasi kasir.
+				paymentStatus = models.PaymentUnpaid
+			} else {
+				// Cashier manual order + CASH: uang sudah diterima kasir,
+				// jadi langsung paid dan masuk kitchen.
+				now := time.Now()
+				orderStatus = models.OrderSentToKitchen
+				paymentStatus = models.PaymentPaid
+				paidAt = &now
+				confirmedBy = createdBy
+			}
+		}
+
 		order = models.Order{
 			OrderCode:     orderCode,
 			OrderType:     request.OrderType,
@@ -60,7 +80,7 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 			CustomerName:  strings.TrimSpace(request.CustomerName),
 			CustomerPhone: strings.TrimSpace(request.CustomerPhone),
 			TotalAmount:   totalAmount,
-			Status:        models.OrderPendingPayment,
+			Status:        orderStatus,
 			CreatedBy:     createdBy,
 		}
 		if err := tx.Create(&order).Error; err != nil {
@@ -73,15 +93,13 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 			return err
 		}
 
-		paymentStatus := models.PaymentWaitingConfirmation
-		if request.PaymentMethod == models.PaymentCash {
-			paymentStatus = models.PaymentUnpaid
-		}
 		payment := models.Payment{
 			OrderID:       order.ID,
 			PaymentMethod: request.PaymentMethod,
 			Amount:        totalAmount,
 			Status:        paymentStatus,
+			PaidAt:        paidAt,
+			ConfirmedBy:   confirmedBy,
 		}
 		return tx.Create(&payment).Error
 	})

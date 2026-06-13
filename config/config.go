@@ -17,6 +17,7 @@ type Config struct {
 	DBName                   string
 	JWTSecret                string
 	FrontendURL              string
+	CorsAllowedOrigins       string
 	RunSeeder                bool
 	MidtransServerKey        string
 	MidtransClientKey        string
@@ -37,6 +38,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("MIDTRANS_IS_PRODUCTION must be true or false")
 	}
 
+	frontendURL := getEnv("FRONTEND_URL", "http://localhost:3000")
+
 	cfg := &Config{
 		AppPort:                  getEnv("APP_PORT", "8080"),
 		DBHost:                   getEnv("DB_HOST", "localhost"),
@@ -45,7 +48,8 @@ func Load() (*Config, error) {
 		DBPassword:               os.Getenv("DB_PASSWORD"),
 		DBName:                   getEnv("DB_NAME", "pos_restaurant"),
 		JWTSecret:                os.Getenv("JWT_SECRET"),
-		FrontendURL:              getEnv("FRONTEND_URL", "http://localhost:3000"),
+		FrontendURL:              frontendURL,
+		CorsAllowedOrigins:       getEnv("CORS_ALLOWED_ORIGINS", frontendURL),
 		RunSeeder:                runSeeder,
 		MidtransServerKey:        os.Getenv("MIDTRANS_SERVER_KEY"),
 		MidtransClientKey:        os.Getenv("MIDTRANS_CLIENT_KEY"),
