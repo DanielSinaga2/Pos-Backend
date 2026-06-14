@@ -72,7 +72,7 @@ Content-Type: application/json
       "note": "tidak terlalu pedas"
     }
   ],
-  "payment_method": "qris_manual"
+  "payment_method": "qris"
 }
 
 ### Update @orderCode and @orderId from the create-order response before continuing.
@@ -111,4 +111,3 @@ Authorization: Bearer {{kitchenToken}}
 ### 11. Complete order as cashier
 PATCH {{baseUrl}}/api/cashier/orders/{{orderId}}/complete
 Authorization: Bearer {{cashierToken}}
-

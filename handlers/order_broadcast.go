@@ -28,7 +28,7 @@ func broadcastOrderCreated(order models.Order) {
 
 	switch order.Payment.Status {
 	case models.PaymentWaitingConfirmation:
-		// QRIS manual / transfer: muncul di antrian konfirmasi kasir.
+		// QRIS dengan bukti bayar manual muncul di antrian konfirmasi kasir.
 		broadcastPaymentWaitingConfirmation(order)
 	case models.PaymentUnpaid:
 		// Customer QR + CASH: menunggu validasi kasir, JANGAN ke kitchen.

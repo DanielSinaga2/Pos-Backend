@@ -45,7 +45,7 @@ BEGIN
 
 	ALTER TABLE payments
 		ADD CONSTRAINT chk_payments_payment_method
-		CHECK (payment_method IN ('cash','qris','qris_manual','transfer'));
+		CHECK (payment_method IN ('cash','qris'));
 END $$;
 `).Error
 }

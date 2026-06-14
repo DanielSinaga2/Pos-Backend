@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"pos-backend/models"
+	"pos-backend/services"
 	"pos-backend/utils"
 
 	"github.com/gofiber/fiber/v2"
@@ -12,11 +16,12 @@ import (
 )
 
 type CashierHandler struct {
-	db *gorm.DB
+	db       *gorm.DB
+	midtrans *services.MidtransService
 }
 
-func NewCashierHandler(db *gorm.DB) *CashierHandler {
-	return &CashierHandler{db: db}
+func NewCashierHandler(db *gorm.DB, midtrans *services.MidtransService) *CashierHandler {
+	return &CashierHandler{db: db, midtrans: midtrans}
 }
 
 func (h *CashierHandler) CreateOrder(c *fiber.Ctx) error {
@@ -33,7 +38,7 @@ func (h *CashierHandler) CreateOrder(c *fiber.Ctx) error {
 		return orderError(c, err, "failed to create order")
 	}
 	broadcastOrderCreated(order)
-	return utils.Success(c, fiber.StatusCreated, "order created successfully", order)
+	return utils.Success(c, fiber.StatusCreated, "order created successfully", cashierOrderResponse(order))
 }
 
 func (h *CashierHandler) ListOrders(c *fiber.Ctx) error {
@@ -41,7 +46,13 @@ func (h *CashierHandler) ListOrders(c *fiber.Ctx) error {
 	if err := preloadOrder(h.db).Order("created_at DESC").Find(&orders).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get orders")
 	}
-	return utils.Success(c, fiber.StatusOK, "orders retrieved successfully", orders)
+
+	var response []fiber.Map
+	for _, order := range orders {
+		response = append(response, cashierOrderResponse(order))
+	}
+
+	return utils.Success(c, fiber.StatusOK, "orders retrieved successfully", response)
 }
 
 func (h *CashierHandler) GetOrder(c *fiber.Ctx) error {
@@ -53,7 +64,99 @@ func (h *CashierHandler) GetOrder(c *fiber.Ctx) error {
 	if err != nil {
 		return orderLookupError(c, err)
 	}
-	return utils.Success(c, fiber.StatusOK, "order retrieved successfully", order)
+	return utils.Success(c, fiber.StatusOK, "order retrieved successfully", cashierOrderResponse(order))
+}
+
+func (h *CashierHandler) CheckPaymentStatus(c *fiber.Ctx) error {
+	id, err := parseID(c, "id")
+	if err != nil {
+		return utils.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	order, err := findOrder(h.db, id)
+	if err != nil {
+		return orderLookupError(c, err)
+	}
+
+	if shouldSyncMidtransPayment(order) {
+		order, err = syncMidtransPaymentByOrderCode(h.db, h.midtrans, order.OrderCode)
+		if err != nil {
+			return orderError(c, err, "failed to sync payment status")
+		}
+		broadcastMidtransPaymentUpdate(order)
+	}
+
+	return utils.Success(c, fiber.StatusOK, "payment status retrieved successfully", cashierOrderResponse(order))
+}
+
+func (h *CashierHandler) RetryPayment(c *fiber.Ctx) error {
+	id, err := parseID(c, "id")
+	if err != nil {
+		return utils.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	order, err := findOrder(h.db, id)
+	if err != nil {
+		return orderLookupError(c, err)
+	}
+	if order.Payment == nil {
+		return utils.Error(c, fiber.StatusNotFound, "payment not found")
+	}
+	if order.Payment.PaymentMethod == models.PaymentCash {
+		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need online payment retry")
+	}
+	if order.Payment.PaymentMethod != models.PaymentQRIS {
+		return utils.Error(c, fiber.StatusBadRequest, "payment retry is only available for qris payment")
+	}
+	if order.Payment.Status == models.PaymentPaid {
+		return utils.Error(c, fiber.StatusConflict, "payment has already been paid")
+	}
+
+	if hasValue(order.Payment.SnapToken) && hasValue(order.Payment.MidtransOrderID) {
+		statusResponse, err := h.midtrans.GetTransactionStatus(strings.TrimSpace(*order.Payment.MidtransOrderID))
+		if err == nil {
+			switch statusResponse.TransactionStatus {
+			case "settlement", "capture":
+				order, err = syncMidtransPaymentByOrderCode(h.db, h.midtrans, order.OrderCode)
+				if err != nil {
+					return orderError(c, err, "failed to sync payment status")
+				}
+				broadcastMidtransPaymentUpdate(order)
+				return utils.Success(c, fiber.StatusOK, "payment already paid", paymentRetryResponse(order))
+			case "pending":
+				return utils.Success(c, fiber.StatusOK, "snap token already exists", paymentRetryResponse(order))
+			}
+		}
+	}
+
+	if hasValue(order.Payment.SnapToken) && !isFinalPaymentStatus(order.Payment.Status) {
+		return utils.Success(c, fiber.StatusOK, "snap token already exists", paymentRetryResponse(order))
+	}
+
+	retryOrderID := fmt.Sprintf("%s-R%d", order.OrderCode, time.Now().Unix())
+	order.Payment.MidtransOrderID = &retryOrderID
+
+	snapResponse, err := h.midtrans.CreateSnapTransaction(order, *order.Payment)
+	if err != nil {
+		return utils.Error(c, fiber.StatusBadGateway, "failed to create snap token")
+	}
+
+	if err := h.db.Model(order.Payment).Updates(map[string]any{
+		"midtrans_order_id": retryOrderID,
+		"snap_token":        snapResponse.Token,
+		"snap_redirect_url": snapResponse.RedirectURL,
+		"payment_type":      midtransPaymentType(order.Payment.PaymentMethod),
+		"status":            models.PaymentPending,
+	}).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
+	}
+
+	order, err = findOrder(h.db, id)
+	if err != nil {
+		return orderLookupError(c, err)
+	}
+
+	return utils.Success(c, fiber.StatusOK, "snap token created", paymentRetryResponse(order))
 }
 
 func (h *CashierHandler) ConfirmPayment(c *fiber.Ctx) error {
@@ -158,6 +261,105 @@ func (h *CashierHandler) CompleteOrder(c *fiber.Ctx) error {
 	}
 	broadcastOrderStatus("order_completed", order)
 	return utils.Success(c, fiber.StatusOK, "order completed successfully", order)
+}
+
+func cashierOrderResponse(order models.Order) fiber.Map {
+	var paymentMethod models.PaymentMethod
+	var paymentStatus models.PaymentStatus
+	if order.Payment != nil {
+		paymentMethod = order.Payment.PaymentMethod
+		paymentStatus = order.Payment.Status
+	}
+
+	return fiber.Map{
+		"id":                order.ID,
+		"order_code":        order.OrderCode,
+		"customer_name":     order.CustomerName,
+		"customer_phone":    order.CustomerPhone,
+		"order_type":        order.OrderType,
+		"table_id":          order.TableID,
+		"table":             order.Table,
+		"items":             order.Items,
+		"total_amount":      order.TotalAmount,
+		"payment_method":    paymentMethod,
+		"payment_status":    paymentStatus,
+		"order_status":      order.Status,
+		"status":            order.Status,
+		"paid_at":           paymentPaidAt(order.Payment),
+		"snap_token":        paymentSnapToken(order.Payment),
+		"payment_url":       paymentURL(order.Payment),
+		"redirect_url":      paymentURL(order.Payment),
+		"snap_redirect_url": paymentURL(order.Payment),
+		"transaction_id":    paymentTransactionID(order.Payment),
+		"payment_reference": paymentTransactionID(order.Payment),
+		"payment":           order.Payment,
+		"created_at":        order.CreatedAt,
+		"updated_at":        order.UpdatedAt,
+	}
+}
+
+func shouldSyncMidtransPayment(order models.Order) bool {
+	if order.Payment == nil {
+		return false
+	}
+	if order.Payment.PaymentMethod == models.PaymentCash {
+		return false
+	}
+	if order.Payment.Status == models.PaymentPaid ||
+		order.Payment.Status == models.PaymentFailed ||
+		order.Payment.Status == models.PaymentCancelled {
+		return false
+	}
+	return hasValue(order.Payment.MidtransOrderID) || hasValue(order.Payment.SnapToken)
+}
+
+func paymentPaidAt(payment *models.Payment) any {
+	if payment == nil {
+		return nil
+	}
+	return payment.PaidAt
+}
+
+func paymentTransactionID(payment *models.Payment) any {
+	if payment == nil {
+		return nil
+	}
+	return payment.TransactionID
+}
+
+func paymentSnapToken(payment *models.Payment) any {
+	if payment == nil {
+		return nil
+	}
+	return payment.SnapToken
+}
+
+func paymentURL(payment *models.Payment) any {
+	if payment == nil {
+		return nil
+	}
+	return payment.SnapRedirectURL
+}
+
+func paymentRetryResponse(order models.Order) fiber.Map {
+	return fiber.Map{
+		"order":             cashierOrderResponse(order),
+		"snap_token":        paymentSnapToken(order.Payment),
+		"payment_url":       paymentURL(order.Payment),
+		"redirect_url":      paymentURL(order.Payment),
+		"snap_redirect_url": paymentURL(order.Payment),
+	}
+}
+
+func isFinalPaymentStatus(status models.PaymentStatus) bool {
+	return status == models.PaymentPaid ||
+		status == models.PaymentFailed ||
+		status == models.PaymentCancelled ||
+		status == models.PaymentRejected
+}
+
+func hasValue(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != ""
 }
 
 func (h *CashierHandler) ListWaitingPayments(c *fiber.Ctx) error {

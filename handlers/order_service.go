@@ -144,7 +144,7 @@ func validateCreateOrderRequest(request createOrderRequest, public bool) string 
 		return "payment_method must be cash or qris"
 	}
 	if !public && !isValidCashierPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash, qris, qris_manual, or transfer"
+		return "payment_method must be cash or qris"
 	}
 	return ""
 }
@@ -214,8 +214,5 @@ func isValidPublicPaymentMethod(method models.PaymentMethod) bool {
 }
 
 func isValidCashierPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash ||
-		method == models.PaymentQRIS ||
-		method == models.PaymentQRISManual ||
-		method == models.PaymentTransfer
+	return method == models.PaymentCash || method == models.PaymentQRIS
 }

@@ -201,7 +201,7 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 
 	return map[string]any{
 		"transaction_details": map[string]any{
-			"order_id":     order.OrderCode,
+			"order_id":     midtransOrderID(order, payment),
 			"gross_amount": order.TotalAmount,
 		},
 		"customer_details": customerDetails,
@@ -219,9 +219,12 @@ func (s *MidtransService) customerPaymentFinishURL(orderCode string) string {
 }
 
 func enabledPaymentsFor(method models.PaymentMethod) []string {
-	if method == models.PaymentTransfer {
-		return []string{"bank_transfer"}
-	}
-
 	return []string{"gopay", "shopeepay"}
+}
+
+func midtransOrderID(order models.Order, payment models.Payment) string {
+	if payment.MidtransOrderID != nil && strings.TrimSpace(*payment.MidtransOrderID) != "" {
+		return strings.TrimSpace(*payment.MidtransOrderID)
+	}
+	return order.OrderCode
 }

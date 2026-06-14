@@ -110,8 +110,8 @@ func validatePaymentProofUpload(order models.Order) string {
 	if order.Payment == nil {
 		return "payment record not found"
 	}
-	if order.Payment.PaymentMethod != models.PaymentQRISManual && order.Payment.PaymentMethod != models.PaymentTransfer {
-		return "payment proof is only accepted for qris_manual or transfer payment"
+	if order.Payment.PaymentMethod != models.PaymentQRIS {
+		return "payment proof is only accepted for qris payment"
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return "payment has already been confirmed"

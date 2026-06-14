@@ -5,10 +5,8 @@ import "time"
 type PaymentMethod string
 
 const (
-	PaymentCash       PaymentMethod = "cash"
-	PaymentQRIS       PaymentMethod = "qris"
-	PaymentQRISManual PaymentMethod = "qris_manual"
-	PaymentTransfer   PaymentMethod = "transfer"
+	PaymentCash PaymentMethod = "cash"
+	PaymentQRIS PaymentMethod = "qris"
 )
 
 type PaymentStatus string
@@ -27,7 +25,7 @@ type Payment struct {
 	ID              uint          `gorm:"primaryKey" json:"id"`
 	OrderID         uint          `gorm:"not null;uniqueIndex" json:"order_id"`
 	Order           *Order        `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"order,omitempty"`
-	PaymentMethod   PaymentMethod `gorm:"type:varchar(30);not null;check:payment_method IN ('cash','qris','qris_manual','transfer')" json:"payment_method"`
+	PaymentMethod   PaymentMethod `gorm:"type:varchar(30);not null;check:payment_method IN ('cash','qris')" json:"payment_method"`
 	Amount          int64         `gorm:"not null;check:amount >= 0" json:"amount"`
 	Status          PaymentStatus `gorm:"type:varchar(30);not null;index;check:status IN ('unpaid','waiting_confirmation','pending','paid','rejected','failed','cancelled')" json:"status"`
 	ProofImageURL   string        `gorm:"size:500" json:"proof_image_url,omitempty"`

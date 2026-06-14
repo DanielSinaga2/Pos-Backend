@@ -162,6 +162,8 @@ POST /api/public/orders/:order_code/upload-payment-proof-file
 POST  /api/cashier/orders
 GET   /api/cashier/orders
 GET   /api/cashier/orders/:id
+GET   /api/cashier/orders/:id/payment-status
+POST  /api/cashier/orders/:id/payment/retry
 PATCH /api/cashier/orders/:id/confirm-payment
 PATCH /api/cashier/orders/:id/cancel
 PATCH /api/cashier/orders/:id/complete
@@ -177,11 +179,15 @@ POST /api/payments/midtrans/sync/:order_code
 GET  /api/payments/midtrans/status/:order_code
 ```
 
-`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris_manual` atau `transfer`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
+`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
 
 `POST /api/payments/midtrans/notification` adalah webhook public dari Midtrans. Untuk testing localhost, gunakan ngrok atau deploy backend agar URL webhook dapat diakses dari dashboard Midtrans Sandbox. Gunakan `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox.
 
 `POST /api/payments/midtrans/sync/:order_code` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini berguna untuk development lokal saat webhook tidak bisa dipakai: backend akan mengecek status transaksi ke Midtrans Transaction Status API, lalu menyinkronkan status order dan payment.
+
+`GET /api/cashier/orders/:id/payment-status` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipakai frontend kasir setelah customer menyelesaikan Snap: backend akan mengecek status terbaru ke Midtrans untuk order online yang punya Snap/Midtrans reference, menyimpan status sukses, lalu mengembalikan data order terbaru.
+
+`POST /api/cashier/orders/:id/payment/retry` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini hanya untuk order `qris` yang belum paid; backend akan memakai `snap_token` lama jika masih pending, atau membuat transaksi Snap baru untuk retry jika transaksi lama sudah final/gagal.
 
 Manual confirm payment tetap tersedia melalui:
 

@@ -155,8 +155,8 @@ func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {
 		if order.Payment == nil {
 			return errors.New("payment record not found")
 		}
-		if order.Payment.PaymentMethod == models.PaymentCash {
-			return &orderServiceError{Status: 400, Message: "payment proof is not accepted for cash payment"}
+		if order.Payment.PaymentMethod != models.PaymentQRIS {
+			return &orderServiceError{Status: 400, Message: "payment proof is only accepted for qris payment"}
 		}
 		if order.Payment.Status == models.PaymentPaid {
 			return &orderServiceError{Status: 409, Message: "payment has already been confirmed"}

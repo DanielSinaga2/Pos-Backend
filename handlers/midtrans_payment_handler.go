@@ -48,6 +48,9 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
 	}
+	if order.Payment.PaymentMethod != models.PaymentQRIS {
+		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris")
+	}
 	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
 		return utils.Success(c, fiber.StatusOK, "snap token already exists", fiber.Map{
 			"order_id":          order.ID,
@@ -180,6 +183,19 @@ func applyMidtransTransactionStatus(tx *gorm.DB, payment *models.Payment, order 
 		"fraud_status":   nullableString(fraudStatus),
 	}
 
+	if payment.Status == models.PaymentPaid {
+		if err := tx.Model(payment).Updates(updates).Error; err != nil {
+			return err
+		}
+		if order.Status == models.OrderPendingPayment || order.Status == models.OrderPaid {
+			if err := tx.Model(order).Update("status", models.OrderSentToKitchen).Error; err != nil {
+				return err
+			}
+			order.Status = models.OrderSentToKitchen
+		}
+		return nil
+	}
+
 	switch transactionStatus {
 	case "settlement", "capture":
 		return markPaymentPaidAndSendOrderToKitchen(tx, payment, order, updates)
@@ -229,10 +245,12 @@ func markPaymentPaidAndSendOrderToKitchen(tx *gorm.DB, payment *models.Payment, 
 	if err := tx.Model(payment).Updates(paymentUpdates).Error; err != nil {
 		return err
 	}
-	if err := tx.Model(order).Update("status", models.OrderSentToKitchen).Error; err != nil {
-		return err
+	if order.Status == models.OrderPendingPayment || order.Status == models.OrderPaid {
+		if err := tx.Model(order).Update("status", models.OrderSentToKitchen).Error; err != nil {
+			return err
+		}
+		order.Status = models.OrderSentToKitchen
 	}
-	order.Status = models.OrderSentToKitchen
 	payment.Status = models.PaymentPaid
 	payment.PaidAt = &now
 	return nil
@@ -348,15 +366,19 @@ func (h *MidtransPaymentHandler) Status(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, "order_code is required")
 	}
 
-	order, err := findOrderByCode(h.db, orderCode)
+	order, err := syncMidtransPaymentByOrderCode(h.db, h.midtrans, orderCode)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.Error(c, fiber.StatusNotFound, "order not found")
 		}
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to get payment status")
+		return orderError(c, err, "failed to get payment status")
 	}
+	broadcastMidtransPaymentUpdate(order)
 
-	return utils.Success(c, fiber.StatusOK, "payment status retrieved", order)
+	return utils.Success(c, fiber.StatusOK, "payment status retrieved", fiber.Map{
+		"order":   order,
+		"payment": order.Payment,
+	})
 }
 
 func findOrderByCode(db *gorm.DB, orderCode string) (models.Order, error) {
@@ -381,8 +403,5 @@ func stringValue(value *string) string {
 }
 
 func midtransPaymentType(method models.PaymentMethod) string {
-	if method == models.PaymentTransfer {
-		return "bank_transfer"
-	}
 	return "qris"
 }

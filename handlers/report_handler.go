@@ -18,8 +18,7 @@ type salesSummary struct {
 	TotalOrders         int64 `json:"total_orders"`
 	TotalRevenue        int64 `json:"total_revenue"`
 	TotalCash           int64 `json:"total_cash"`
-	TotalQRISManual     int64 `json:"total_qris_manual"`
-	TotalTransfer       int64 `json:"total_transfer"`
+	TotalQRIS           int64 `json:"total_qris"`
 	WaitingPayment      int64 `json:"waiting_payment"`
 	Ready               int64 `json:"ready"`
 	WaitingPaymentCount int64 `json:"waiting_payment_count"`
@@ -79,8 +78,7 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		COUNT(DISTINCT orders.id) AS total_orders,
 		COALESCE(SUM(payments.amount), 0) AS total_revenue,
 		COALESCE(SUM(CASE WHEN payments.payment_method = 'cash' THEN payments.amount ELSE 0 END), 0) AS total_cash,
-		COALESCE(SUM(CASE WHEN payments.payment_method = 'qris_manual' THEN payments.amount ELSE 0 END), 0) AS total_qris_manual,
-		COALESCE(SUM(CASE WHEN payments.payment_method = 'transfer' THEN payments.amount ELSE 0 END), 0) AS total_transfer
+		COALESCE(SUM(CASE WHEN payments.payment_method = 'qris' THEN payments.amount ELSE 0 END), 0) AS total_qris
 	`).Scan(&summary).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate sales report")
 	}
