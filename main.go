@@ -35,6 +35,7 @@ func main() {
 		&models.Menu{},
 		&models.Table{},
 		&models.QRCode{},
+		&models.Customer{},
 		&models.Order{},
 		&models.OrderItem{},
 		&models.Payment{},

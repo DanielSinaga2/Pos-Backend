@@ -48,8 +48,8 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
 	}
-	if order.Payment.PaymentMethod != models.PaymentQRIS {
-		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris")
+	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
+		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris or online")
 	}
 	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
 		return utils.Success(c, fiber.StatusOK, "snap token already exists", fiber.Map{
@@ -267,6 +267,9 @@ func syncMidtransPaymentByOrderCode(db *gorm.DB, midtrans *services.MidtransServ
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return models.Order{}, &orderServiceError{Status: fiber.StatusBadRequest, Message: "cash payment does not need Midtrans"}
 	}
+	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
+		return models.Order{}, &orderServiceError{Status: fiber.StatusBadRequest, Message: "payment_method must be qris or online"}
+	}
 
 	midtransOrderID := order.OrderCode
 	if order.Payment.MidtransOrderID != nil && strings.TrimSpace(*order.Payment.MidtransOrderID) != "" {
@@ -403,5 +406,8 @@ func stringValue(value *string) string {
 }
 
 func midtransPaymentType(method models.PaymentMethod) string {
+	if method == models.PaymentOnline {
+		return string(models.PaymentOnline)
+	}
 	return "qris"
 }

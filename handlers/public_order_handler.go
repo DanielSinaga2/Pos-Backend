@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"pos-backend/models"
 	"pos-backend/services"
@@ -20,6 +21,35 @@ type PublicOrderHandler struct {
 
 type uploadPaymentProofRequest struct {
 	ImageURL string `json:"image_url"`
+}
+
+type publicCustomerResponse struct {
+	ID    uint   `json:"id"`
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+	Email string `json:"email,omitempty"`
+}
+
+type customerHistoryItemResponse struct {
+	MenuName string `json:"menu_name"`
+	Quantity int    `json:"quantity"`
+	Price    int64  `json:"price"`
+	Subtotal int64  `json:"subtotal"`
+	Notes    string `json:"notes"`
+}
+
+type customerHistoryOrderResponse struct {
+	ID            uint                          `json:"id"`
+	OrderCode     string                        `json:"order_code"`
+	OrderType     models.OrderType              `json:"order_type"`
+	TableName     string                        `json:"table_name"`
+	TableNumber   string                        `json:"table_number"`
+	TotalAmount   int64                         `json:"total_amount"`
+	PaymentMethod models.PaymentMethod          `json:"payment_method"`
+	PaymentStatus models.PaymentStatus          `json:"payment_status"`
+	OrderStatus   models.OrderStatus            `json:"order_status"`
+	CreatedAt     time.Time                     `json:"created_at"`
+	Items         []customerHistoryItemResponse `json:"items"`
 }
 
 func NewPublicOrderHandler(db *gorm.DB, midtrans *services.MidtransService) *PublicOrderHandler {
@@ -54,6 +84,61 @@ func (h *PublicOrderHandler) Get(c *fiber.Ctx) error {
 	return utils.Success(c, fiber.StatusOK, "order retrieved successfully", order)
 }
 
+func (h *PublicOrderHandler) CustomerProfile(c *fiber.Ctx) error {
+	phone := normalizeCustomerPhone(c.Query("phone"))
+	if phone == "" {
+		return utils.Error(c, fiber.StatusBadRequest, "phone is required")
+	}
+
+	customer, err := h.findCustomerByPhone(phone)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.Success(c, fiber.StatusOK, "customer profile retrieved successfully", fiber.Map{
+				"customer": nil,
+			})
+		}
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to get customer profile")
+	}
+
+	return utils.Success(c, fiber.StatusOK, "customer profile retrieved successfully", fiber.Map{
+		"customer": publicCustomerResponseFromModel(customer),
+	})
+}
+
+func (h *PublicOrderHandler) CustomerOrders(c *fiber.Ctx) error {
+	phone := normalizeCustomerPhone(c.Query("phone"))
+	if phone == "" {
+		return utils.Error(c, fiber.StatusBadRequest, "phone is required")
+	}
+
+	customer, err := h.findCustomerByPhone(phone)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.Success(c, fiber.StatusOK, "customer orders retrieved successfully", fiber.Map{
+				"customer": nil,
+				"orders":   []customerHistoryOrderResponse{},
+			})
+		}
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to get customer orders")
+	}
+
+	var orders []models.Order
+	if err := h.db.
+		Preload("Table").
+		Preload("Payment").
+		Preload("Items.Menu").
+		Where("customer_id = ?", customer.ID).
+		Order("created_at DESC").
+		Find(&orders).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to get customer orders")
+	}
+
+	return utils.Success(c, fiber.StatusOK, "customer orders retrieved successfully", fiber.Map{
+		"customer": publicCustomerResponseFromModel(customer),
+		"orders":   customerHistoryOrderResponses(orders),
+	})
+}
+
 func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 	orderCode := strings.TrimSpace(c.Params("order_code"))
 	if orderCode == "" {
@@ -73,15 +158,15 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
 	}
-	if order.Payment.PaymentMethod != models.PaymentQRIS {
-		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris")
+	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
+		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris or online")
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return utils.Error(c, fiber.StatusConflict, "payment already paid")
 	}
 	if order.Payment.SnapToken != nil && *order.Payment.SnapToken != "" {
 		if order.Payment.PaymentType == nil || strings.TrimSpace(*order.Payment.PaymentType) == "" {
-			if err := h.db.Model(order.Payment).Update("payment_type", "qris").Error; err != nil {
+			if err := h.db.Model(order.Payment).Update("payment_type", midtransPaymentType(order.Payment.PaymentMethod)).Error; err != nil {
 				return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
 			}
 		}
@@ -101,7 +186,7 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 		"midtrans_order_id": order.OrderCode,
 		"snap_token":        snapResponse.Token,
 		"snap_redirect_url": snapResponse.RedirectURL,
-		"payment_type":      "qris",
+		"payment_type":      midtransPaymentType(order.Payment.PaymentMethod),
 	}).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to save snap token")
 	}
@@ -155,8 +240,8 @@ func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {
 		if order.Payment == nil {
 			return errors.New("payment record not found")
 		}
-		if order.Payment.PaymentMethod != models.PaymentQRIS {
-			return &orderServiceError{Status: 400, Message: "payment proof is only accepted for qris payment"}
+		if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
+			return &orderServiceError{Status: 400, Message: "payment proof is only accepted for qris or online payment"}
 		}
 		if order.Payment.Status == models.PaymentPaid {
 			return &orderServiceError{Status: 409, Message: "payment has already been confirmed"}
@@ -178,4 +263,62 @@ func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {
 	}
 	broadcastPaymentWaitingConfirmation(updatedOrder)
 	return utils.Success(c, fiber.StatusOK, "payment proof uploaded successfully", updatedOrder)
+}
+
+func (h *PublicOrderHandler) findCustomerByPhone(phone string) (models.Customer, error) {
+	var customer models.Customer
+	err := h.db.Where("phone = ?", phone).First(&customer).Error
+	return customer, err
+}
+
+func publicCustomerResponseFromModel(customer models.Customer) publicCustomerResponse {
+	return publicCustomerResponse{
+		ID:    customer.ID,
+		Name:  customer.Name,
+		Phone: customer.Phone,
+		Email: customer.Email,
+	}
+}
+
+func customerHistoryOrderResponses(orders []models.Order) []customerHistoryOrderResponse {
+	response := make([]customerHistoryOrderResponse, 0, len(orders))
+	for _, order := range orders {
+		var tableName string
+		if order.Table != nil {
+			tableName = order.Table.TableNumber
+		}
+
+		var paymentMethod models.PaymentMethod
+		var paymentStatus models.PaymentStatus
+		if order.Payment != nil {
+			paymentMethod = order.Payment.PaymentMethod
+			paymentStatus = order.Payment.Status
+		}
+
+		items := make([]customerHistoryItemResponse, 0, len(order.Items))
+		for _, item := range order.Items {
+			items = append(items, customerHistoryItemResponse{
+				MenuName: item.Menu.Name,
+				Quantity: item.Quantity,
+				Price:    item.Price,
+				Subtotal: item.Subtotal,
+				Notes:    item.Note,
+			})
+		}
+
+		response = append(response, customerHistoryOrderResponse{
+			ID:            order.ID,
+			OrderCode:     order.OrderCode,
+			OrderType:     order.OrderType,
+			TableName:     tableName,
+			TableNumber:   tableName,
+			TotalAmount:   order.TotalAmount,
+			PaymentMethod: paymentMethod,
+			PaymentStatus: paymentStatus,
+			OrderStatus:   order.Status,
+			CreatedAt:     order.CreatedAt,
+			Items:         items,
+		})
+	}
+	return response
 }

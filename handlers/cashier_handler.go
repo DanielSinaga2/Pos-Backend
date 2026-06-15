@@ -105,8 +105,8 @@ func (h *CashierHandler) RetryPayment(c *fiber.Ctx) error {
 	if order.Payment.PaymentMethod == models.PaymentCash {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need online payment retry")
 	}
-	if order.Payment.PaymentMethod != models.PaymentQRIS {
-		return utils.Error(c, fiber.StatusBadRequest, "payment retry is only available for qris payment")
+	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
+		return utils.Error(c, fiber.StatusBadRequest, "payment retry is only available for qris or online payment")
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return utils.Error(c, fiber.StatusConflict, "payment has already been paid")
@@ -195,6 +195,55 @@ func (h *CashierHandler) ConfirmPayment(c *fiber.Ctx) error {
 	}
 	broadcastPaymentConfirmed(order)
 	return utils.Success(c, fiber.StatusOK, "payment confirmed and order sent to kitchen", order)
+}
+
+func (h *CashierHandler) ConfirmCashPayment(c *fiber.Ctx) error {
+	id, err := parseID(c, "id")
+	if err != nil {
+		return utils.Error(c, fiber.StatusBadRequest, err.Error())
+	}
+	userID, ok := c.Locals("user_id").(uint)
+	if !ok {
+		return utils.Error(c, fiber.StatusUnauthorized, "authentication is required")
+	}
+
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		var order models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Payment").First(&order, id).Error; err != nil {
+			return err
+		}
+		if order.Payment == nil {
+			return &orderServiceError{Status: fiber.StatusNotFound, Message: "payment not found"}
+		}
+		if order.Payment.PaymentMethod != models.PaymentCash {
+			return &orderServiceError{Status: fiber.StatusBadRequest, Message: "cash payment confirmation is only available for cash payment"}
+		}
+		if order.Payment.Status == models.PaymentPaid {
+			return &orderServiceError{Status: fiber.StatusConflict, Message: "payment has already been paid"}
+		}
+		if order.Status != models.OrderPendingPayment {
+			return &orderServiceError{Status: fiber.StatusConflict, Message: "only waiting payment order can be confirmed"}
+		}
+
+		return markPaymentPaidAndSendOrderToKitchen(tx, order.Payment, &order, map[string]any{
+			"confirmed_by": userID,
+		})
+	})
+	if err != nil {
+		return orderError(c, err, "failed to confirm cash payment")
+	}
+
+	order, err := findOrder(h.db, id)
+	if err != nil {
+		return orderLookupError(c, err)
+	}
+	broadcastCashPaymentConfirmed(order)
+
+	return utils.Success(c, fiber.StatusOK, "cash payment confirmed and order sent to kitchen", fiber.Map{
+		"order":          cashierOrderResponse(order),
+		"payment_status": models.PaymentPaid,
+		"order_status":   models.OrderSentToKitchen,
+	})
 }
 
 func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
@@ -303,6 +352,9 @@ func shouldSyncMidtransPayment(order models.Order) bool {
 		return false
 	}
 	if order.Payment.PaymentMethod == models.PaymentCash {
+		return false
+	}
+	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
 		return false
 	}
 	if order.Payment.Status == models.PaymentPaid ||

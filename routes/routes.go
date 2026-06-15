@@ -86,6 +86,8 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	publicOrderHandler := handlers.NewPublicOrderHandler(db, midtransService)
 	public.Post("/orders", publicOrderHandler.Create)
 	public.Get("/orders/:order_code", publicOrderHandler.Get)
+	public.Get("/customers/orders", publicOrderHandler.CustomerOrders)
+	public.Get("/customers/profile", publicOrderHandler.CustomerProfile)
 	public.Post("/orders/:order_code/create-snap", publicOrderHandler.CreateSnap)
 	public.Post("/orders/:order_code/sync-payment", publicOrderHandler.SyncPayment)
 	public.Post("/orders/:order_code/upload-payment-proof", publicOrderHandler.UploadPaymentProof)
@@ -98,6 +100,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	cashier.Get("/orders/:id", cashierHandler.GetOrder)
 	cashier.Get("/orders/:id/payment-status", cashierHandler.CheckPaymentStatus)
 	cashier.Post("/orders/:id/payment/retry", cashierHandler.RetryPayment)
+	cashier.Post("/orders/:id/confirm-cash-payment", cashierHandler.ConfirmCashPayment)
 	cashier.Patch("/orders/:id/confirm-payment", cashierHandler.ConfirmPayment)
 	cashier.Patch("/orders/:id/cancel", cashierHandler.CancelOrder)
 	cashier.Post("/orders/:id/cancel", cashierHandler.CancelOrder)
@@ -123,6 +126,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 
 	reportHandler := handlers.NewReportHandler(db)
 	admin := api.Group("/admin", jwtAuth, adminOnly)
+	admin.Get("/dashboard", reportHandler.Dashboard)
 	admin.Get("/reports/sales", reportHandler.Sales)
 	admin.Post("/menus/:id/upload-image", menuHandler.UploadImage)
 

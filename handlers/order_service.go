@@ -24,6 +24,7 @@ type createOrderRequest struct {
 	TableID       *uint                `json:"table_id"`
 	CustomerName  string               `json:"customer_name"`
 	CustomerPhone string               `json:"customer_phone"`
+	CustomerEmail string               `json:"customer_email"`
 	Items         []orderItemRequest   `json:"items"`
 	PaymentMethod models.PaymentMethod `json:"payment_method"`
 }
@@ -38,6 +39,10 @@ func (e *orderServiceError) Error() string {
 }
 
 func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, public bool) (models.Order, error) {
+	request.CustomerName = strings.TrimSpace(request.CustomerName)
+	request.CustomerPhone = normalizeCustomerPhone(request.CustomerPhone)
+	request.CustomerEmail = strings.TrimSpace(request.CustomerEmail)
+
 	if message := validateCreateOrderRequest(request, public); message != "" {
 		return models.Order{}, &orderServiceError{Status: 400, Message: message}
 	}
@@ -60,8 +65,8 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 
 		if request.PaymentMethod == models.PaymentCash {
 			if public {
-				// Customer QR + CASH: tetap menunggu validasi kasir.
-				paymentStatus = models.PaymentUnpaid
+				// Customer QR + CASH: menunggu kasir menerima uang, belum masuk kitchen.
+				paymentStatus = models.PaymentWaitingConfirmation
 			} else {
 				// Cashier manual order + CASH: uang sudah diterima kasir,
 				// jadi langsung paid dan masuk kitchen.
@@ -73,12 +78,18 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 			}
 		}
 
+		customerID, err := findOrCreateOrderCustomer(tx, request)
+		if err != nil {
+			return err
+		}
+
 		order = models.Order{
 			OrderCode:     orderCode,
 			OrderType:     request.OrderType,
 			TableID:       request.TableID,
-			CustomerName:  strings.TrimSpace(request.CustomerName),
-			CustomerPhone: strings.TrimSpace(request.CustomerPhone),
+			CustomerID:    customerID,
+			CustomerName:  request.CustomerName,
+			CustomerPhone: request.CustomerPhone,
 			TotalAmount:   totalAmount,
 			Status:        orderStatus,
 			CreatedBy:     createdBy,
@@ -126,11 +137,20 @@ func validateCreateOrderRequest(request createOrderRequest, public bool) string 
 	if len(request.Items) == 0 {
 		return "items are required"
 	}
-	if len(strings.TrimSpace(request.CustomerName)) > 150 {
+	if public && request.CustomerName == "" {
+		return "customer_name is required"
+	}
+	if public && request.CustomerPhone == "" {
+		return "customer_phone is required"
+	}
+	if len(request.CustomerName) > 150 {
 		return "customer_name cannot exceed 150 characters"
 	}
-	if len(strings.TrimSpace(request.CustomerPhone)) > 30 {
+	if len(request.CustomerPhone) > 30 {
 		return "customer_phone cannot exceed 30 characters"
+	}
+	if len(request.CustomerEmail) > 150 {
+		return "customer_email cannot exceed 150 characters"
 	}
 	for _, item := range request.Items {
 		if item.MenuID == 0 {
@@ -141,12 +161,54 @@ func validateCreateOrderRequest(request createOrderRequest, public bool) string 
 		}
 	}
 	if public && !isValidPublicPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash or qris"
+		return "payment_method must be cash, qris, or online"
 	}
 	if !public && !isValidCashierPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash or qris"
+		return "payment_method must be cash, qris, or online"
 	}
 	return ""
+}
+
+func findOrCreateOrderCustomer(tx *gorm.DB, request createOrderRequest) (*uint, error) {
+	if request.CustomerPhone == "" {
+		return nil, nil
+	}
+
+	var customer models.Customer
+	err := tx.Where("phone = ?", request.CustomerPhone).First(&customer).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		customer = models.Customer{
+			Name:  request.CustomerName,
+			Phone: request.CustomerPhone,
+			Email: request.CustomerEmail,
+		}
+		if customer.Name == "" {
+			customer.Name = request.CustomerPhone
+		}
+		if err := tx.Create(&customer).Error; err != nil {
+			return nil, err
+		}
+		return &customer.ID, nil
+	}
+
+	updates := map[string]any{}
+	if request.CustomerName != "" && request.CustomerName != customer.Name {
+		updates["name"] = request.CustomerName
+	}
+	if request.CustomerEmail != "" && request.CustomerEmail != customer.Email {
+		updates["email"] = request.CustomerEmail
+	}
+	if len(updates) > 0 {
+		if err := tx.Model(&customer).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	return &customer.ID, nil
 }
 
 func buildOrderItems(tx *gorm.DB, requests []orderItemRequest) ([]models.OrderItem, int64, error) {
@@ -202,6 +264,7 @@ func findOrder(db *gorm.DB, id uint) (models.Order, error) {
 func preloadOrder(db *gorm.DB) *gorm.DB {
 	return db.
 		Preload("Table").
+		Preload("Customer").
 		Preload("Creator").
 		Preload("Items.Menu").
 		Preload("Items.Menu.Category").
@@ -210,9 +273,9 @@ func preloadOrder(db *gorm.DB) *gorm.DB {
 }
 
 func isValidPublicPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash || method == models.PaymentQRIS
+	return method == models.PaymentCash || models.IsOnlinePaymentMethod(method)
 }
 
 func isValidCashierPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash || method == models.PaymentQRIS
+	return method == models.PaymentCash || models.IsOnlinePaymentMethod(method)
 }

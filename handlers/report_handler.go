@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"time"
 
 	"pos-backend/models"
@@ -38,6 +39,38 @@ type salesTrend struct {
 	TotalRevenue int64  `json:"total_revenue"`
 }
 
+type dashboardSummary struct {
+	Revenue        int64 `json:"revenue"`
+	Orders         int64 `json:"orders"`
+	WaitingPayment int64 `json:"waiting_payment"`
+	Ready          int64 `json:"ready"`
+}
+
+type dashboardSalesTrend struct {
+	Date         string `json:"date"`
+	Label        string `json:"label"`
+	TotalOrders  int64  `json:"total_orders"`
+	TotalRevenue int64  `json:"total_revenue"`
+}
+
+type dashboardRecentOrder struct {
+	OrderCode     string               `json:"order_code"`
+	CustomerName  string               `json:"customer_name"`
+	OrderType     models.OrderType     `json:"order_type"`
+	TableName     string               `json:"table_name"`
+	TotalAmount   int64                `json:"total_amount"`
+	PaymentMethod models.PaymentMethod `json:"payment_method"`
+	PaymentStatus models.PaymentStatus `json:"payment_status"`
+	OrderStatus   models.OrderStatus   `json:"order_status"`
+	CreatedAt     time.Time            `json:"created_at"`
+}
+
+type dashboardResponse struct {
+	Summary      dashboardSummary       `json:"summary"`
+	SalesTrend   []dashboardSalesTrend  `json:"sales_trend"`
+	RecentOrders []dashboardRecentOrder `json:"recent_orders"`
+}
+
 type paymentMethodBreakdown struct {
 	PaymentMethod string `json:"payment_method"`
 	TotalOrders   int64  `json:"total_orders"`
@@ -53,6 +86,56 @@ type salesReportResponse struct {
 
 func NewReportHandler(db *gorm.DB) *ReportHandler {
 	return &ReportHandler{db: db}
+}
+
+func (h *ReportHandler) Dashboard(c *fiber.Ctx) error {
+	var summary dashboardSummary
+
+	if err := h.db.Table("payments").
+		Select("COALESCE(SUM(payments.amount), 0) AS revenue").
+		Joins("JOIN orders ON orders.id = payments.order_id").
+		Where("payments.status = ?", models.PaymentPaid).
+		Where("orders.status <> ?", models.OrderCancelled).
+		Scan(&summary).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to calculate dashboard revenue")
+	}
+
+	if err := h.db.Model(&models.Order{}).Count(&summary.Orders).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to count dashboard orders")
+	}
+
+	if err := h.db.Table("orders").
+		Joins("LEFT JOIN payments ON payments.order_id = orders.id").
+		Where("orders.status = ? OR payments.status IN ?", models.OrderPendingPayment, []models.PaymentStatus{
+			models.PaymentUnpaid,
+			models.PaymentPending,
+			models.PaymentWaitingConfirmation,
+		}).
+		Count(&summary.WaitingPayment).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to count dashboard waiting payment orders")
+	}
+
+	if err := h.db.Model(&models.Order{}).
+		Where("status = ?", models.OrderReady).
+		Count(&summary.Ready).Error; err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to count dashboard ready orders")
+	}
+
+	salesTrend, err := h.dashboardSalesTrend()
+	if err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to generate dashboard sales trend")
+	}
+
+	recentOrders, err := h.dashboardRecentOrders()
+	if err != nil {
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to get dashboard recent orders")
+	}
+
+	return utils.Success(c, fiber.StatusOK, "dashboard retrieved successfully", dashboardResponse{
+		Summary:      summary,
+		SalesTrend:   salesTrend,
+		RecentOrders: recentOrders,
+	})
 }
 
 func (h *ReportHandler) Sales(c *fiber.Ctx) error {
@@ -187,6 +270,96 @@ func (h *ReportHandler) Sales(c *fiber.Ctx) error {
 		PaymentMethodBreakdown: paymentMethodBreakdownItems,
 		BestSellingMenus:       bestSellingMenus,
 	})
+}
+
+func (h *ReportHandler) dashboardSalesTrend() ([]dashboardSalesTrend, error) {
+	type trendRow struct {
+		Date         string
+		TotalOrders  int64
+		TotalRevenue int64
+	}
+
+	now := time.Now().In(jakartaLocation)
+	startDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, jakartaLocation).AddDate(0, 0, -6)
+	endDate := startDate.AddDate(0, 0, 7)
+	paidAtOrOrderCreatedAt := "COALESCE(payments.paid_at, orders.created_at)"
+
+	var rows []trendRow
+	if err := h.db.Table("payments").
+		Select(`
+			TO_CHAR(DATE_TRUNC('day', `+paidAtOrOrderCreatedAt+`), 'YYYY-MM-DD') AS date,
+			COUNT(DISTINCT orders.id) AS total_orders,
+			COALESCE(SUM(payments.amount), 0) AS total_revenue
+		`).
+		Joins("JOIN orders ON orders.id = payments.order_id").
+		Where("payments.status = ?", models.PaymentPaid).
+		Where("orders.status <> ?", models.OrderCancelled).
+		Where(paidAtOrOrderCreatedAt+" >= ?", startDate).
+		Where(paidAtOrOrderCreatedAt+" < ?", endDate).
+		Group("DATE_TRUNC('day', " + paidAtOrOrderCreatedAt + ")").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	rowByDate := make(map[string]trendRow, len(rows))
+	for _, row := range rows {
+		rowByDate[row.Date] = row
+	}
+
+	trend := make([]dashboardSalesTrend, 0, 7)
+	for day := startDate; day.Before(endDate); day = day.AddDate(0, 0, 1) {
+		date := day.Format("2006-01-02")
+		row := rowByDate[date]
+		trend = append(trend, dashboardSalesTrend{
+			Date:         date,
+			Label:        fmt.Sprintf("%02d %s", day.Day(), day.Format("Jan")),
+			TotalOrders:  row.TotalOrders,
+			TotalRevenue: row.TotalRevenue,
+		})
+	}
+
+	return trend, nil
+}
+
+func (h *ReportHandler) dashboardRecentOrders() ([]dashboardRecentOrder, error) {
+	var orders []models.Order
+	if err := h.db.
+		Preload("Table").
+		Preload("Payment").
+		Order("created_at DESC").
+		Limit(10).
+		Find(&orders).Error; err != nil {
+		return nil, err
+	}
+
+	recentOrders := make([]dashboardRecentOrder, 0, len(orders))
+	for _, order := range orders {
+		var tableName string
+		if order.Table != nil {
+			tableName = order.Table.TableNumber
+		}
+
+		var paymentMethod models.PaymentMethod
+		var paymentStatus models.PaymentStatus
+		if order.Payment != nil {
+			paymentMethod = order.Payment.PaymentMethod
+			paymentStatus = order.Payment.Status
+		}
+
+		recentOrders = append(recentOrders, dashboardRecentOrder{
+			OrderCode:     order.OrderCode,
+			CustomerName:  order.CustomerName,
+			OrderType:     order.OrderType,
+			TableName:     tableName,
+			TotalAmount:   order.TotalAmount,
+			PaymentMethod: paymentMethod,
+			PaymentStatus: paymentStatus,
+			OrderStatus:   order.Status,
+			CreatedAt:     order.CreatedAt,
+		})
+	}
+
+	return recentOrders, nil
 }
 
 func parseReportDateRange(startValue, endValue string) (*time.Time, *time.Time, string) {

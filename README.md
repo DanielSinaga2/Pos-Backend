@@ -152,9 +152,37 @@ GET  /api/public/menu/:id
 GET  /api/public/qrcode/:code
 POST /api/public/orders
 GET  /api/public/orders/:order_code
+GET  /api/public/customers/profile?phone=08xxx
+GET  /api/public/customers/orders?phone=08xxx
 POST /api/public/orders/:order_code/upload-payment-proof
 POST /api/public/orders/:order_code/upload-payment-proof-file
 ```
+
+`POST /api/public/orders` menerima `customer_name`, `customer_phone`, dan `customer_email` opsional. Backend menormalisasi nomor telepon, membuat atau memperbarui customer, lalu menyimpan `customer_id` pada order tanpa mengubah `table_id` dari QR meja.
+
+Contoh create order customer QR:
+
+```json
+{
+  "order_type": "dine_in",
+  "table_id": 1,
+  "customer_name": "Daniel",
+  "customer_phone": "0822-1234-5678",
+  "customer_email": "daniel@example.com",
+  "payment_method": "qris",
+  "items": [
+    {
+      "menu_id": 1,
+      "quantity": 2,
+      "note": "less sugar"
+    }
+  ]
+}
+```
+
+`GET /api/public/customers/profile?phone=08xxx` mengembalikan profil customer untuk autofill jika nomor pernah order.
+
+`GET /api/public/customers/orders?phone=08xxx` mengembalikan riwayat order customer berdasarkan nomor telepon, terbaru dulu, termasuk item dan status payment terbaru.
 
 ### Cashier
 
@@ -164,6 +192,7 @@ GET   /api/cashier/orders
 GET   /api/cashier/orders/:id
 GET   /api/cashier/orders/:id/payment-status
 POST  /api/cashier/orders/:id/payment/retry
+POST  /api/cashier/orders/:id/confirm-cash-payment
 PATCH /api/cashier/orders/:id/confirm-payment
 PATCH /api/cashier/orders/:id/cancel
 PATCH /api/cashier/orders/:id/complete
@@ -179,7 +208,7 @@ POST /api/payments/midtrans/sync/:order_code
 GET  /api/payments/midtrans/status/:order_code
 ```
 
-`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
+`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris` atau `online`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
 
 `POST /api/payments/midtrans/notification` adalah webhook public dari Midtrans. Untuk testing localhost, gunakan ngrok atau deploy backend agar URL webhook dapat diakses dari dashboard Midtrans Sandbox. Gunakan `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox.
 
@@ -187,13 +216,16 @@ GET  /api/payments/midtrans/status/:order_code
 
 `GET /api/cashier/orders/:id/payment-status` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipakai frontend kasir setelah customer menyelesaikan Snap: backend akan mengecek status terbaru ke Midtrans untuk order online yang punya Snap/Midtrans reference, menyimpan status sukses, lalu mengembalikan data order terbaru.
 
-`POST /api/cashier/orders/:id/payment/retry` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini hanya untuk order `qris` yang belum paid; backend akan memakai `snap_token` lama jika masih pending, atau membuat transaksi Snap baru untuk retry jika transaksi lama sudah final/gagal.
+`POST /api/cashier/orders/:id/payment/retry` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini hanya untuk order `qris` atau `online` yang belum paid; backend akan memakai `snap_token` lama jika masih pending, atau membuat transaksi Snap baru untuk retry jika transaksi lama sudah final/gagal.
 
 Manual confirm payment tetap tersedia melalui:
 
 ```text
+POST  /api/cashier/orders/:id/confirm-cash-payment
 PATCH /api/cashier/orders/:id/confirm-payment
 ```
+
+`POST /api/cashier/orders/:id/confirm-cash-payment` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini khusus order `cash` dari customer QR yang masih menunggu pembayaran; setelah kasir menerima uang, backend mengubah payment menjadi `paid`, order menjadi `sent_to_kitchen`, lalu mengirim event realtime ke cashier dan kitchen.
 
 ### Kitchen
 
@@ -206,9 +238,12 @@ PATCH /api/kitchen/orders/:id/ready
 ### Admin Reports
 
 ```text
+GET /api/admin/dashboard
 GET /api/admin/reports/sales
 GET /api/admin/reports/sales?start_date=2026-01-01&end_date=2026-01-31
 ```
+
+`GET /api/admin/dashboard` membutuhkan JWT role `admin`. Endpoint ini mengembalikan ringkasan revenue/order/waiting payment/ready, tren penjualan 7 hari terakhir, dan recent orders untuk dashboard admin.
 
 ### WebSocket
 

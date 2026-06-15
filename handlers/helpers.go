@@ -30,6 +30,19 @@ func isValidHTTPURL(value string) bool {
 	return err == nil && (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != ""
 }
 
+func normalizeCustomerPhone(value string) string {
+	replacer := strings.NewReplacer(
+		" ", "",
+		"-", "",
+		"\t", "",
+		"\n", "",
+		"\r", "",
+		"(", "",
+		")", "",
+	)
+	return replacer.Replace(strings.TrimSpace(value))
+}
+
 func recordExists[T any](db *gorm.DB, id uint) (bool, error) {
 	var count int64
 	err := db.Model(new(T)).Where("id = ?", id).Count(&count).Error
