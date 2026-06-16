@@ -31,11 +31,19 @@ type publicCustomerResponse struct {
 }
 
 type customerHistoryItemResponse struct {
-	MenuName string `json:"menu_name"`
-	Quantity int    `json:"quantity"`
-	Price    int64  `json:"price"`
-	Subtotal int64  `json:"subtotal"`
-	Notes    string `json:"notes"`
+	MenuName  string                          `json:"menu_name"`
+	Quantity  int                             `json:"quantity"`
+	Price     int64                           `json:"price"`
+	UnitPrice int64                           `json:"unit_price"`
+	Subtotal  int64                           `json:"subtotal"`
+	Notes     string                          `json:"notes"`
+	Options   []customerHistoryOptionResponse `json:"options"`
+}
+
+type customerHistoryOptionResponse struct {
+	GroupName       string `json:"group_name"`
+	OptionName      string `json:"option_name"`
+	AdditionalPrice int64  `json:"additional_price"`
 }
 
 type customerHistoryOrderResponse struct {
@@ -50,6 +58,12 @@ type customerHistoryOrderResponse struct {
 	OrderStatus   models.OrderStatus            `json:"order_status"`
 	CreatedAt     time.Time                     `json:"created_at"`
 	Items         []customerHistoryItemResponse `json:"items"`
+}
+
+type publicOrderPaymentSyncResponse struct {
+	models.Order
+	PaymentStatus models.PaymentStatus `json:"payment_status"`
+	OrderStatus   models.OrderStatus   `json:"order_status"`
 }
 
 func NewPublicOrderHandler(db *gorm.DB, midtrans *services.MidtransService) *PublicOrderHandler {
@@ -127,6 +141,7 @@ func (h *PublicOrderHandler) CustomerOrders(c *fiber.Ctx) error {
 		Preload("Table").
 		Preload("Payment").
 		Preload("Items.Menu").
+		Preload("Items.Options").
 		Where("customer_id = ?", customer.ID).
 		Order("created_at DESC").
 		Find(&orders).Error; err != nil {
@@ -146,7 +161,7 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 	}
 
 	var order models.Order
-	if err := h.db.Preload("Items.Menu").Preload("Payment").Where("order_code = ?", orderCode).First(&order).Error; err != nil {
+	if err := h.db.Preload("Items.Menu").Preload("Items.Options").Preload("Payment").Where("order_code = ?", orderCode).First(&order).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.Error(c, fiber.StatusNotFound, "order not found")
 		}
@@ -209,7 +224,7 @@ func (h *PublicOrderHandler) SyncPayment(c *fiber.Ctx) error {
 		return orderError(c, err, "failed to sync payment")
 	}
 	broadcastMidtransPaymentUpdate(order)
-	return utils.Success(c, fiber.StatusOK, "payment synced successfully", order)
+	return utils.Success(c, fiber.StatusOK, "payment synced successfully", publicOrderPaymentSyncResponseFromOrder(order))
 }
 
 func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {
@@ -280,6 +295,19 @@ func publicCustomerResponseFromModel(customer models.Customer) publicCustomerRes
 	}
 }
 
+func publicOrderPaymentSyncResponseFromOrder(order models.Order) publicOrderPaymentSyncResponse {
+	var paymentStatus models.PaymentStatus
+	if order.Payment != nil {
+		paymentStatus = order.Payment.Status
+	}
+
+	return publicOrderPaymentSyncResponse{
+		Order:         order,
+		PaymentStatus: paymentStatus,
+		OrderStatus:   order.Status,
+	}
+}
+
 func customerHistoryOrderResponses(orders []models.Order) []customerHistoryOrderResponse {
 	response := make([]customerHistoryOrderResponse, 0, len(orders))
 	for _, order := range orders {
@@ -297,12 +325,26 @@ func customerHistoryOrderResponses(orders []models.Order) []customerHistoryOrder
 
 		items := make([]customerHistoryItemResponse, 0, len(order.Items))
 		for _, item := range order.Items {
+			options := make([]customerHistoryOptionResponse, 0, len(item.Options))
+			for _, option := range item.Options {
+				options = append(options, customerHistoryOptionResponse{
+					GroupName:       option.GroupName,
+					OptionName:      option.OptionName,
+					AdditionalPrice: option.AdditionalPrice,
+				})
+			}
+			unitPrice := item.UnitPrice
+			if unitPrice == 0 {
+				unitPrice = item.Price
+			}
 			items = append(items, customerHistoryItemResponse{
-				MenuName: item.Menu.Name,
-				Quantity: item.Quantity,
-				Price:    item.Price,
-				Subtotal: item.Subtotal,
-				Notes:    item.Note,
+				MenuName:  item.Menu.Name,
+				Quantity:  item.Quantity,
+				Price:     item.Price,
+				UnitPrice: unitPrice,
+				Subtotal:  item.Subtotal,
+				Notes:     item.Note,
+				Options:   options,
 			})
 		}
 

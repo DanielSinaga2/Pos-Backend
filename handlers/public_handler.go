@@ -20,11 +20,11 @@ func NewPublicHandler(db *gorm.DB) *PublicHandler {
 
 func (h *PublicHandler) ListMenu(c *fiber.Ctx) error {
 	var menus []models.Menu
-	if err := h.db.
+	if err := preloadMenuOptions(h.db.
 		Preload("Category").
 		Joins("JOIN categories ON categories.id = menus.category_id").
 		Where("menus.is_available = ? AND categories.is_active = ?", true, true).
-		Order("categories.name ASC, menus.name ASC").
+		Order("categories.name ASC, menus.name ASC")).
 		Find(&menus).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get public menu")
 	}
@@ -37,10 +37,10 @@ func (h *PublicHandler) GetMenu(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 	var menu models.Menu
-	err = h.db.
+	err = preloadMenuOptions(h.db.
 		Preload("Category").
 		Joins("JOIN categories ON categories.id = menus.category_id").
-		Where("menus.id = ? AND menus.is_available = ? AND categories.is_active = ?", id, true, true).
+		Where("menus.id = ? AND menus.is_available = ? AND categories.is_active = ?", id, true, true)).
 		First(&menu).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

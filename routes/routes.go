@@ -125,10 +125,18 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	kitchen.Post("/orders/:id/complete", kitchenHandler.CompleteOrder)
 
 	reportHandler := handlers.NewReportHandler(db)
+	menuOptionHandler := handlers.NewMenuOptionHandler(db)
 	admin := api.Group("/admin", jwtAuth, adminOnly)
 	admin.Get("/dashboard", reportHandler.Dashboard)
 	admin.Get("/reports/sales", reportHandler.Sales)
 	admin.Post("/menus/:id/upload-image", menuHandler.UploadImage)
+	admin.Get("/menus/:menu_id/options", menuOptionHandler.ListByMenu)
+	admin.Post("/menus/:menu_id/options/groups", menuOptionHandler.CreateGroup)
+	admin.Put("/menu-options/groups/:group_id", menuOptionHandler.UpdateGroup)
+	admin.Delete("/menu-options/groups/:group_id", menuOptionHandler.DeleteGroup)
+	admin.Post("/menu-options/groups/:group_id/options", menuOptionHandler.CreateOption)
+	admin.Put("/menu-options/:option_id", menuOptionHandler.UpdateOption)
+	admin.Delete("/menu-options/:option_id", menuOptionHandler.DeleteOption)
 
 	webSocketAuth := middleware.WebSocketJWTAuth(cfg.JWTSecret)
 	webSocketUpgrade := func(c *fiber.Ctx) error {

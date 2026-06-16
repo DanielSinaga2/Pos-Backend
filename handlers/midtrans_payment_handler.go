@@ -33,7 +33,7 @@ func (h *MidtransPaymentHandler) CreateSnap(c *fiber.Ctx) error {
 	}
 
 	var order models.Order
-	if err := h.db.Preload("Items.Menu").Preload("Payment").First(&order, orderID).Error; err != nil {
+	if err := h.db.Preload("Items.Menu").Preload("Items.Options").Preload("Payment").First(&order, orderID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.Error(c, fiber.StatusNotFound, "order not found")
 		}
@@ -270,6 +270,9 @@ func syncMidtransPaymentByOrderCode(db *gorm.DB, midtrans *services.MidtransServ
 	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
 		return models.Order{}, &orderServiceError{Status: fiber.StatusBadRequest, Message: "payment_method must be qris or online"}
 	}
+	if order.Payment.Status == models.PaymentPaid {
+		return findOrder(db, order.ID)
+	}
 
 	midtransOrderID := order.OrderCode
 	if order.Payment.MidtransOrderID != nil && strings.TrimSpace(*order.Payment.MidtransOrderID) != "" {
@@ -280,19 +283,56 @@ func syncMidtransPaymentByOrderCode(db *gorm.DB, midtrans *services.MidtransServ
 	if err != nil {
 		return models.Order{}, &orderServiceError{Status: fiber.StatusBadGateway, Message: "failed to get midtrans status"}
 	}
+	log.Printf(
+		"midtrans sync status order_code=%s midtrans_order_id=%s transaction_status=%s payment_type=%s transaction_id=%s fraud_status=%s",
+		order.OrderCode,
+		midtransOrderID,
+		statusResponse.TransactionStatus,
+		statusResponse.PaymentType,
+		statusResponse.TransactionID,
+		statusResponse.FraudStatus,
+	)
+
+	var latestOrder models.Order
+	if err := db.Preload("Payment").Where("order_code = ?", orderCode).First(&latestOrder).Error; err != nil {
+		return models.Order{}, err
+	}
+	if latestOrder.Payment == nil {
+		return models.Order{}, &orderServiceError{Status: fiber.StatusNotFound, Message: "payment not found"}
+	}
+	if latestOrder.Payment.Status == models.PaymentPaid {
+		return findOrder(db, latestOrder.ID)
+	}
+
+	if !midtransStatusUpdatesPaymentStatus(statusResponse.TransactionStatus) ||
+		!midtransStatusChangeNeeded(latestOrder, statusResponse.TransactionStatus) {
+		if err := updateMidtransPaymentMetadata(db, latestOrder.Payment, statusResponse); err != nil {
+			return models.Order{}, err
+		}
+		return findOrder(db, latestOrder.ID)
+	}
 
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, order.ID).Error; err != nil {
+		var lockedOrder models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Payment").
+			Where("order_code = ?", orderCode).
+			First(&lockedOrder).Error; err != nil {
 			return err
 		}
-		var payment models.Payment
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ?", order.ID).First(&payment).Error; err != nil {
-			return err
+		if lockedOrder.Payment == nil {
+			return &orderServiceError{Status: fiber.StatusNotFound, Message: "payment not found"}
+		}
+		if lockedOrder.Payment.Status == models.PaymentPaid {
+			return nil
+		}
+		if !midtransStatusChangeNeeded(lockedOrder, statusResponse.TransactionStatus) {
+			return updateMidtransPaymentMetadata(tx, lockedOrder.Payment, statusResponse)
 		}
 		return applyMidtransTransactionStatus(
 			tx,
-			&payment,
-			&order,
+			lockedOrder.Payment,
+			&lockedOrder,
 			statusResponse.TransactionStatus,
 			statusResponse.PaymentType,
 			statusResponse.TransactionID,
@@ -304,6 +344,42 @@ func syncMidtransPaymentByOrderCode(db *gorm.DB, midtrans *services.MidtransServ
 	}
 
 	return findOrder(db, order.ID)
+}
+
+func midtransStatusUpdatesPaymentStatus(transactionStatus string) bool {
+	switch transactionStatus {
+	case "settlement", "capture", "pending", "expire", "deny", "failure", "cancel":
+		return true
+	default:
+		return false
+	}
+}
+
+func midtransStatusChangeNeeded(order models.Order, transactionStatus string) bool {
+	if order.Payment == nil {
+		return false
+	}
+
+	switch transactionStatus {
+	case "settlement", "capture":
+		return order.Payment.Status != models.PaymentPaid
+	case "pending":
+		return order.Payment.Status != models.PaymentPending || order.Status != models.OrderPendingPayment
+	case "expire", "deny", "failure":
+		return order.Payment.Status != models.PaymentFailed || order.Status != models.OrderCancelled
+	case "cancel":
+		return order.Payment.Status != models.PaymentCancelled || order.Status != models.OrderCancelled
+	default:
+		return false
+	}
+}
+
+func updateMidtransPaymentMetadata(db *gorm.DB, payment *models.Payment, statusResponse services.TransactionStatusResponse) error {
+	return db.Model(payment).Updates(map[string]any{
+		"payment_type":   nullableString(statusResponse.PaymentType),
+		"transaction_id": nullableString(statusResponse.TransactionID),
+		"fraud_status":   nullableString(statusResponse.FraudStatus),
+	}).Error
 }
 
 func broadcastMidtransPaymentUpdate(order models.Order) {

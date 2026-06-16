@@ -33,11 +33,14 @@ func main() {
 		&models.User{},
 		&models.Category{},
 		&models.Menu{},
+		&models.MenuOptionGroup{},
+		&models.MenuOption{},
 		&models.Table{},
 		&models.QRCode{},
 		&models.Customer{},
 		&models.Order{},
 		&models.OrderItem{},
+		&models.OrderItemOption{},
 		&models.Payment{},
 	); err != nil {
 		log.Fatalf("migrate database: %v", err)

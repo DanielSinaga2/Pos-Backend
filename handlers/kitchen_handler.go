@@ -32,6 +32,7 @@ func (h *KitchenHandler) ListOrders(c *fiber.Ctx) error {
 	if err := h.db.
 		Preload("Table").
 		Preload("Items.Menu").
+		Preload("Items.Options").
 		Preload("Payment").
 		Joins("JOIN payments ON payments.order_id = orders.id").
 		Where("orders.status IN ?", statuses).

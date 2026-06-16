@@ -14,9 +14,16 @@ import (
 var jakartaLocation = time.FixedZone("Asia/Jakarta", 7*60*60)
 
 type orderItemRequest struct {
-	MenuID   uint   `json:"menu_id"`
-	Quantity int    `json:"quantity"`
-	Note     string `json:"note"`
+	MenuID   uint                     `json:"menu_id"`
+	Quantity int                      `json:"quantity"`
+	Note     string                   `json:"note"`
+	Notes    string                   `json:"notes"`
+	Options  []orderItemOptionRequest `json:"options"`
+}
+
+type orderItemOptionRequest struct {
+	GroupID  uint `json:"group_id"`
+	OptionID uint `json:"option_id"`
 }
 
 type createOrderRequest struct {
@@ -49,7 +56,7 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 
 	var order models.Order
 	err := db.Transaction(func(tx *gorm.DB) error {
-		items, totalAmount, err := buildOrderItems(tx, request.Items)
+		items, itemOptions, totalAmount, err := buildOrderItems(tx, request.Items)
 		if err != nil {
 			return err
 		}
@@ -102,6 +109,16 @@ func createOrder(db *gorm.DB, request createOrderRequest, createdBy *uint, publi
 		}
 		if err := tx.Create(&items).Error; err != nil {
 			return err
+		}
+		for index := range items {
+			for optionIndex := range itemOptions[index] {
+				itemOptions[index][optionIndex].OrderItemID = items[index].ID
+			}
+			if len(itemOptions[index]) > 0 {
+				if err := tx.Create(&itemOptions[index]).Error; err != nil {
+					return err
+				}
+			}
 		}
 
 		payment := models.Payment{
@@ -211,31 +228,116 @@ func findOrCreateOrderCustomer(tx *gorm.DB, request createOrderRequest) (*uint, 
 	return &customer.ID, nil
 }
 
-func buildOrderItems(tx *gorm.DB, requests []orderItemRequest) ([]models.OrderItem, int64, error) {
+func buildOrderItems(tx *gorm.DB, requests []orderItemRequest) ([]models.OrderItem, [][]models.OrderItemOption, int64, error) {
 	items := make([]models.OrderItem, 0, len(requests))
+	itemOptions := make([][]models.OrderItemOption, 0, len(requests))
 	var totalAmount int64
 	for _, request := range requests {
 		var menu models.Menu
 		if err := tx.First(&menu, request.MenuID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, 0, &orderServiceError{Status: 404, Message: fmt.Sprintf("menu with id %d not found", request.MenuID)}
+				return nil, nil, 0, &orderServiceError{Status: 404, Message: fmt.Sprintf("menu with id %d not found", request.MenuID)}
 			}
-			return nil, 0, err
+			return nil, nil, 0, err
 		}
 		if !menu.IsAvailable {
-			return nil, 0, &orderServiceError{Status: 409, Message: fmt.Sprintf("menu %s is not available", menu.Name)}
+			return nil, nil, 0, &orderServiceError{Status: 409, Message: fmt.Sprintf("menu %s is not available", menu.Name)}
 		}
-		subtotal := menu.Price * int64(request.Quantity)
+
+		options, optionsTotal, err := buildOrderItemOptions(tx, menu, request.Options)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		unitPrice := menu.Price + optionsTotal
+		subtotal := unitPrice * int64(request.Quantity)
 		totalAmount += subtotal
+		note := strings.TrimSpace(request.Note)
+		if note == "" {
+			note = strings.TrimSpace(request.Notes)
+		}
 		items = append(items, models.OrderItem{
-			MenuID:   menu.ID,
-			Quantity: request.Quantity,
-			Price:    menu.Price,
-			Subtotal: subtotal,
-			Note:     strings.TrimSpace(request.Note),
+			MenuID:    menu.ID,
+			Quantity:  request.Quantity,
+			Price:     menu.Price,
+			UnitPrice: unitPrice,
+			Subtotal:  subtotal,
+			Note:      note,
+		})
+		itemOptions = append(itemOptions, options)
+	}
+	return items, itemOptions, totalAmount, nil
+}
+
+func buildOrderItemOptions(tx *gorm.DB, menu models.Menu, requests []orderItemOptionRequest) ([]models.OrderItemOption, int64, error) {
+	var groups []models.MenuOptionGroup
+	if err := tx.
+		Preload("Options", "is_active = ?", true).
+		Where("menu_id = ? AND is_active = ?", menu.ID, true).
+		Find(&groups).Error; err != nil {
+		return nil, 0, err
+	}
+
+	groupByID := make(map[uint]models.MenuOptionGroup, len(groups))
+	optionByID := map[uint]models.MenuOption{}
+	for _, group := range groups {
+		groupByID[group.ID] = group
+		for _, option := range group.Options {
+			optionByID[option.ID] = option
+		}
+	}
+
+	selectedByGroup := map[uint][]models.MenuOption{}
+	seenOptions := map[uint]bool{}
+	for _, request := range requests {
+		group, ok := groupByID[request.GroupID]
+		if !ok {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option group %d is not available for menu %s", request.GroupID, menu.Name)}
+		}
+		option, ok := optionByID[request.OptionID]
+		if !ok || option.GroupID != group.ID {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option %d is not available for group %s", request.OptionID, group.Name)}
+		}
+		if seenOptions[option.ID] {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option %s is selected more than once", option.Name)}
+		}
+		seenOptions[option.ID] = true
+		selectedByGroup[group.ID] = append(selectedByGroup[group.ID], option)
+	}
+
+	for _, group := range groups {
+		selectedCount := len(selectedByGroup[group.ID])
+		if group.Required && selectedCount == 0 {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option group %s is required", group.Name)}
+		}
+		if selectedCount < group.MinSelect {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option group %s requires at least %d selection(s)", group.Name, group.MinSelect)}
+		}
+		if selectedCount > group.MaxSelect {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option group %s allows at most %d selection(s)", group.Name, group.MaxSelect)}
+		}
+		if group.Type == models.MenuOptionGroupSingle && selectedCount > 1 {
+			return nil, 0, &orderServiceError{Status: 400, Message: fmt.Sprintf("option group %s only allows one selection", group.Name)}
+		}
+	}
+
+	options := make([]models.OrderItemOption, 0, len(requests))
+	var total int64
+	for _, request := range requests {
+		group := groupByID[request.GroupID]
+		option := optionByID[request.OptionID]
+		groupID := group.ID
+		optionID := option.ID
+		total += option.AdditionalPrice
+		options = append(options, models.OrderItemOption{
+			MenuOptionGroupID: &groupID,
+			MenuOptionID:      &optionID,
+			GroupName:         group.Name,
+			OptionName:        option.Name,
+			AdditionalPrice:   option.AdditionalPrice,
 		})
 	}
-	return items, totalAmount, nil
+
+	return options, total, nil
 }
 
 func generateOrderCode(tx *gorm.DB) (string, error) {
@@ -268,6 +370,7 @@ func preloadOrder(db *gorm.DB) *gorm.DB {
 		Preload("Creator").
 		Preload("Items.Menu").
 		Preload("Items.Menu.Category").
+		Preload("Items.Options").
 		Preload("Payment").
 		Preload("Payment.Confirmer")
 }

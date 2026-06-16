@@ -172,14 +172,18 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 
 	itemDetails := make([]map[string]any, 0, len(order.Items))
 	for _, item := range order.Items {
-		name := item.Menu.Name
+		name := midtransItemName(item)
 		nameRunes := []rune(name)
 		if len(nameRunes) > 50 {
 			name = string(nameRunes[:50])
 		}
+		price := item.UnitPrice
+		if price == 0 {
+			price = item.Price
+		}
 		itemDetails = append(itemDetails, map[string]any{
-			"id":       strconv.FormatUint(uint64(item.MenuID), 10),
-			"price":    item.Price,
+			"id":       "menu-" + strconv.FormatUint(uint64(item.MenuID), 10),
+			"price":    price,
 			"quantity": item.Quantity,
 			"name":     name,
 		})
@@ -204,10 +208,15 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 			"order_id":     midtransOrderID(order, payment),
 			"gross_amount": order.TotalAmount,
 		},
-		"customer_details": customerDetails,
-		"finish_url":       finishURL,
+		"customer_details":     customerDetails,
+		"finish_url":           finishURL,
+		"finish_redirect_url":  finishURL,
+		"error_redirect_url":   finishURL,
+		"pending_redirect_url": finishURL,
 		"callbacks": map[string]any{
-			"finish": finishURL,
+			"finish":  finishURL,
+			"error":   finishURL,
+			"pending": finishURL,
 		},
 		"enabled_payments": enabledPayments,
 		"item_details":     itemDetails,
@@ -215,11 +224,30 @@ func (s *MidtransService) buildSnapPayload(order models.Order, payment models.Pa
 }
 
 func (s *MidtransService) customerPaymentFinishURL(orderCode string) string {
-	return strings.TrimRight(s.frontendURL, "/") + "/order/payment-return?order_code=" + url.QueryEscape(orderCode)
+	return strings.TrimRight(s.frontendURL, "/") + "/order/payment-result?order_code=" + url.QueryEscape(orderCode)
 }
 
 func enabledPaymentsFor(method models.PaymentMethod) []string {
 	return []string{"gopay", "shopeepay"}
+}
+
+func midtransItemName(item models.OrderItem) string {
+	name := item.Menu.Name
+	if len(item.Options) == 0 {
+		return name
+	}
+
+	optionNames := make([]string, 0, len(item.Options))
+	for _, option := range item.Options {
+		optionName := strings.TrimSpace(option.OptionName)
+		if optionName != "" {
+			optionNames = append(optionNames, optionName)
+		}
+	}
+	if len(optionNames) == 0 {
+		return name
+	}
+	return name + " (" + strings.Join(optionNames, ", ") + ")"
 }
 
 func midtransOrderID(order models.Order, payment models.Payment) string {

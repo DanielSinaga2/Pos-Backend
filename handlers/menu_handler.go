@@ -34,7 +34,7 @@ func NewMenuHandler(db *gorm.DB) *MenuHandler {
 
 func (h *MenuHandler) List(c *fiber.Ctx) error {
 	var menus []models.Menu
-	if err := h.db.Preload("Category").Order("name ASC").Find(&menus).Error; err != nil {
+	if err := preloadMenuOptions(h.db.Preload("Category")).Order("name ASC").Find(&menus).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get menus")
 	}
 	return utils.Success(c, fiber.StatusOK, "menus retrieved successfully", menus)
@@ -66,7 +66,7 @@ func (h *MenuHandler) ListByCategory(c *fiber.Ctx) error {
 	}
 
 	var menus []models.Menu
-	if err := h.db.Preload("Category").Where("category_id = ?", categoryID).Order("name ASC").Find(&menus).Error; err != nil {
+	if err := preloadMenuOptions(h.db.Preload("Category")).Where("category_id = ?", categoryID).Order("name ASC").Find(&menus).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get menus")
 	}
 	return utils.Success(c, fiber.StatusOK, "menus retrieved successfully", menus)
@@ -167,8 +167,18 @@ func (h *MenuHandler) UpdateAvailability(c *fiber.Ctx) error {
 
 func (h *MenuHandler) find(id uint) (models.Menu, error) {
 	var menu models.Menu
-	err := h.db.Preload("Category").First(&menu, id).Error
+	err := preloadMenuOptions(h.db.Preload("Category")).First(&menu, id).Error
 	return menu, err
+}
+
+func preloadMenuOptions(db *gorm.DB) *gorm.DB {
+	return db.
+		Preload("OptionGroups", func(db *gorm.DB) *gorm.DB {
+			return db.Where("is_active = ?", true).Order("sort_order ASC, id ASC")
+		}).
+		Preload("OptionGroups.Options", func(db *gorm.DB) *gorm.DB {
+			return db.Where("is_active = ?", true).Order("sort_order ASC, id ASC")
+		})
 }
 
 func validateMenuRequest(db *gorm.DB, request *menuRequest) string {
