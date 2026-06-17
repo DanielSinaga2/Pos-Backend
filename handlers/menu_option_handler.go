@@ -47,12 +47,22 @@ func (h *MenuOptionHandler) ListByMenu(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusNotFound, "menu not found")
 	}
 
+	includeInactive := c.QueryBool("include_inactive", false)
+	optionsQuery := func(db *gorm.DB) *gorm.DB {
+		if !includeInactive {
+			db = db.Where("is_active = ?", true)
+		}
+		return db.Order("sort_order ASC, id ASC")
+	}
+	groupsQuery := h.db.
+		Preload("Options", optionsQuery).
+		Where("menu_id = ?", menuID)
+	if !includeInactive {
+		groupsQuery = groupsQuery.Where("is_active = ?", true)
+	}
+
 	var groups []models.MenuOptionGroup
-	if err := h.db.
-		Preload("Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC, id ASC")
-		}).
-		Where("menu_id = ?", menuID).
+	if err := groupsQuery.
 		Order("sort_order ASC, id ASC").
 		Find(&groups).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get menu options")
@@ -148,7 +158,7 @@ func (h *MenuOptionHandler) DeleteGroup(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to delete option group")
 	}
 	group.IsActive = false
-	return utils.Success(c, fiber.StatusOK, "option group deleted successfully", group)
+	return utils.Success(c, fiber.StatusOK, "Group pilihan dinonaktifkan", nil)
 }
 
 func (h *MenuOptionHandler) CreateOption(c *fiber.Ctx) error {
@@ -228,7 +238,7 @@ func (h *MenuOptionHandler) DeleteOption(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to delete option")
 	}
 	option.IsActive = false
-	return utils.Success(c, fiber.StatusOK, "option deleted successfully", option)
+	return utils.Success(c, fiber.StatusOK, "Pilihan dinonaktifkan", nil)
 }
 
 func normalizeAndValidateOptionGroupRequest(request *menuOptionGroupRequest) string {

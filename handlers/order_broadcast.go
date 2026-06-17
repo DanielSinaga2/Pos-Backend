@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	kitchenws "pos-backend/internal/ws"
 	"pos-backend/models"
 	realtime "pos-backend/websocket"
 )
 
 func broadcastOrderCreated(order models.Order) {
+	kitchenws.BroadcastNewOrder(order)
+
 	// Selalu broadcast ke cashier agar kasir bisa lihat semua order baru.
 	realtime.BroadcastToCashier("order_created", order)
 	realtime.BroadcastToCustomer(order.OrderCode, "order_created", order)

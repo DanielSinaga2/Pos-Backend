@@ -1,6 +1,10 @@
 package websocket
 
-import "fmt"
+import (
+	"fmt"
+
+	kitchenws "pos-backend/internal/ws"
+)
 
 const (
 	CashierChannel = "cashier"
@@ -19,6 +23,7 @@ func BroadcastToCashier(event string, data any) {
 
 func BroadcastToKitchen(event string, data any) {
 	DefaultHub.Broadcast(KitchenChannel, event, data)
+	kitchenws.BroadcastKitchenEvent(event, data)
 }
 
 func BroadcastToCustomer(orderCode, event string, data any) {

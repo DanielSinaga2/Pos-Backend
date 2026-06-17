@@ -3,6 +3,7 @@ package routes
 import (
 	"pos-backend/config"
 	"pos-backend/handlers"
+	kitchenws "pos-backend/internal/ws"
 	"pos-backend/middleware"
 	"pos-backend/models"
 	"pos-backend/services"
@@ -155,7 +156,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 		webSocketAuth,
 		middleware.AllowRoles(models.RoleKitchen, models.RoleAdmin),
 		webSocketUpgrade,
-		fiberws.New(realtime.NewClientHandler(realtime.KitchenChannel)),
+		fiberws.New(kitchenws.NewKitchenHandler(kitchenws.DefaultKitchenManager)),
 	)
 	app.Get("/ws/customer/:order_code",
 		func(c *fiber.Ctx) error {

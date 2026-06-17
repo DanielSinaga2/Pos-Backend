@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -249,6 +250,7 @@ func (h *CashierHandler) ConfirmCashPayment(c *fiber.Ctx) error {
 func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
 	id, err := parseID(c, "id")
 	if err != nil {
+		log.Printf("CANCEL ORDER FAILED order_id=%s error=%v", c.Params("id"), err)
 		return utils.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 	err = h.db.Transaction(func(tx *gorm.DB) error {
@@ -257,13 +259,13 @@ func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
 			return err
 		}
 		if order.Status == models.OrderCancelled {
-			return &orderServiceError{Status: 409, Message: "order has already been cancelled"}
+			return &orderServiceError{Status: fiber.StatusBadRequest, Message: "Pesanan sudah dibatalkan"}
 		}
-		if order.Status == models.OrderCompleted {
-			return &orderServiceError{Status: 409, Message: "completed order cannot be cancelled"}
+		if !canCancelOrder(order) {
+			return &orderServiceError{Status: fiber.StatusBadRequest, Message: "Pesanan sudah diproses dan tidak dapat dibatalkan"}
 		}
-		if order.Payment != nil && order.Payment.Status != models.PaymentPaid {
-			if err := tx.Model(order.Payment).Update("status", models.PaymentRejected).Error; err != nil {
+		if order.Payment != nil && canCancelPayment(order.Payment.Status) {
+			if err := tx.Model(order.Payment).Update("status", models.PaymentCancelled).Error; err != nil {
 				return err
 			}
 		}
@@ -273,14 +275,34 @@ func (h *CashierHandler) CancelOrder(c *fiber.Ctx) error {
 		return nil
 	})
 	if err != nil {
+		log.Printf("CANCEL ORDER FAILED order_id=%d error=%v", id, err)
 		return orderError(c, err, "failed to cancel order")
 	}
 	order, err := findOrder(h.db, id)
 	if err != nil {
+		log.Printf("CANCEL ORDER FAILED order_id=%d error=%v", id, err)
 		return orderLookupError(c, err)
 	}
 	broadcastOrderStatus("order_cancelled", order)
-	return utils.Success(c, fiber.StatusOK, "order cancelled successfully", order)
+	log.Printf("CANCEL ORDER SUCCESS order_id=%d order_code=%s", order.ID, order.OrderCode)
+	return utils.Success(c, fiber.StatusOK, "Pesanan berhasil dibatalkan", cashierOrderResponse(order))
+}
+
+func canCancelOrder(order models.Order) bool {
+	if order.Status != models.OrderPendingPayment {
+		return false
+	}
+	if order.Payment != nil && order.Payment.Status == models.PaymentPaid {
+		return false
+	}
+	return true
+}
+
+func canCancelPayment(status models.PaymentStatus) bool {
+	return status == models.PaymentUnpaid ||
+		status == models.PaymentPending ||
+		status == models.PaymentWaitingConfirmation ||
+		status == models.PaymentRejected
 }
 
 func (h *CashierHandler) CompleteOrder(c *fiber.Ctx) error {
