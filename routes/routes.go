@@ -38,6 +38,7 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	users.Get("/", userHandler.List)
 	users.Get("/:id", userHandler.Get)
 	users.Post("/", userHandler.Create)
+	users.Put("/:id/activate", userHandler.Activate)
 	users.Put("/:id", userHandler.Update)
 	users.Delete("/:id", userHandler.Delete)
 

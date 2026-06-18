@@ -16,6 +16,7 @@ type User struct {
 	Email     string    `gorm:"size:150;uniqueIndex;not null" json:"email"`
 	Password  string    `gorm:"size:255;not null" json:"-"`
 	Role      Role      `gorm:"type:varchar(20);not null;default:'cashier';check:role IN ('admin','cashier','kitchen')" json:"role"`
+	IsActive  bool      `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

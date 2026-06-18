@@ -50,6 +50,21 @@ END $$;
 `).Error
 }
 
+func EnsureUserIsActiveColumn(db *gorm.DB) error {
+	return db.Exec(`
+ALTER TABLE users
+	ADD COLUMN IF NOT EXISTS is_active boolean;
+
+UPDATE users
+SET is_active = true
+WHERE is_active IS NULL;
+
+ALTER TABLE users
+	ALTER COLUMN is_active SET DEFAULT true,
+	ALTER COLUMN is_active SET NOT NULL;
+`).Error
+}
+
 func EnsurePaymentStatusConstraint(db *gorm.DB) error {
 	return db.Exec(`
 DO $$

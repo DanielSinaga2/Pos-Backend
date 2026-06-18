@@ -28,9 +28,12 @@ type userResponse struct {
 	Name      string      `json:"name"`
 	Email     string      `json:"email"`
 	Role      models.Role `json:"role"`
+	IsActive  bool        `json:"is_active"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
 }
+
+var errUserAlreadyInactive = errors.New("user already inactive")
 
 func NewUserHandler(db *gorm.DB) *UserHandler {
 	return &UserHandler{db: db}
@@ -38,7 +41,20 @@ func NewUserHandler(db *gorm.DB) *UserHandler {
 
 func (h *UserHandler) List(c *fiber.Ctx) error {
 	var users []models.User
-	if err := h.db.Order("name ASC").Find(&users).Error; err != nil {
+	status := strings.ToLower(strings.TrimSpace(c.Query("status", "active")))
+
+	query := h.db.Order("name ASC")
+	switch status {
+	case "all":
+	case "active", "":
+		query = query.Where("is_active = ?", true)
+	case "inactive":
+		query = query.Where("is_active = ?", false)
+	default:
+		return utils.Error(c, fiber.StatusBadRequest, "status must be all, active, or inactive")
+	}
+
+	if err := query.Find(&users).Error; err != nil {
 		return utils.Error(c, fiber.StatusInternalServerError, "failed to get users")
 	}
 
@@ -87,6 +103,7 @@ func (h *UserHandler) Create(c *fiber.Ctx) error {
 		Email:    request.Email,
 		Password: hashedPassword,
 		Role:     models.Role(request.Role),
+		IsActive: true,
 	}
 	if err := h.db.Create(&user).Error; err != nil {
 		if isDuplicateKey(err) {
@@ -161,16 +178,56 @@ func (h *UserHandler) Delete(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, "you cannot delete your own user")
 	}
 
-	user, err := h.find(id)
+	var user models.User
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&user, id).Error; err != nil {
+			return err
+		}
+		if !user.IsActive {
+			return errUserAlreadyInactive
+		}
+		if err := tx.Model(&user).Update("is_active", false).Error; err != nil {
+			return err
+		}
+		user.IsActive = false
+		return nil
+	}); err != nil {
+		if errors.Is(err, errUserAlreadyInactive) {
+			return utils.Error(c, fiber.StatusBadRequest, "user already inactive")
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return userLookupError(c, err)
+		}
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to deactivate user")
+	}
+
+	return utils.Success(c, fiber.StatusOK, "user deactivated successfully", nil)
+}
+
+func (h *UserHandler) Activate(c *fiber.Ctx) error {
+	id, err := parseID(c, "id")
 	if err != nil {
-		return userLookupError(c, err)
+		return utils.Error(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	if err := h.db.Delete(&user).Error; err != nil {
-		return utils.Error(c, fiber.StatusInternalServerError, "failed to delete user")
+	var user models.User
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&user, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&user).Update("is_active", true).Error; err != nil {
+			return err
+		}
+		user.IsActive = true
+		return nil
+	}); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return userLookupError(c, err)
+		}
+		return utils.Error(c, fiber.StatusInternalServerError, "failed to activate user")
 	}
 
-	return utils.Success(c, fiber.StatusOK, "user deleted successfully", toUserResponse(user))
+	return utils.Success(c, fiber.StatusOK, "user activated successfully", nil)
 }
 
 func (h *UserHandler) find(id uint) (models.User, error) {
@@ -230,6 +287,7 @@ func toUserResponse(user models.User) userResponse {
 		Name:      user.Name,
 		Email:     user.Email,
 		Role:      user.Role,
+		IsActive:  user.IsActive,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 	}

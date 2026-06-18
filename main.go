@@ -48,6 +48,9 @@ func main() {
 	if err := database.EnsurePaymentMethodConstraint(db); err != nil {
 		log.Fatalf("migrate payment method constraint: %v", err)
 	}
+	if err := database.EnsureUserIsActiveColumn(db); err != nil {
+		log.Fatalf("migrate user active column: %v", err)
+	}
 	if err := database.EnsurePaymentStatusConstraint(db); err != nil {
 		log.Fatalf("migrate payment status constraint: %v", err)
 	}
