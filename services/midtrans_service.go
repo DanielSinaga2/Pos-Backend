@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,6 +37,32 @@ type MidtransService struct {
 type SnapResponse struct {
 	Token       string `json:"token"`
 	RedirectURL string `json:"redirect_url"`
+}
+
+type CreatePaymentTransactionInput struct {
+	OrderID       string
+	GrossAmount   int64
+	Customer      PaymentCustomer
+	PaymentMethod string
+}
+
+type PaymentCustomer struct {
+	FirstName string
+	Email     string
+	Phone     string
+}
+
+type PayloadSummary struct {
+	EnabledPayments []string `json:"enabled_payments"`
+	GrossAmount     int64    `json:"gross_amount"`
+}
+
+type CreatePaymentTransactionResult struct {
+	OrderID        string
+	PaymentMethod  string
+	SnapToken      string
+	RedirectURL    string
+	PayloadSummary PayloadSummary
 }
 
 type NotificationPayload struct {
@@ -79,6 +106,79 @@ func NewMidtransService(cfg *config.Config) *MidtransService {
 	}
 }
 
+func (s *MidtransService) CreatePaymentTransaction(input CreatePaymentTransactionInput) (CreatePaymentTransactionResult, error) {
+	if s.serverKey == "" {
+		return CreatePaymentTransactionResult{}, errors.New("MIDTRANS_SERVER_KEY is required")
+	}
+
+	payload, enabledPayments, err := s.BuildPaymentPayload(input)
+	if err != nil {
+		return CreatePaymentTransactionResult{}, err
+	}
+
+	log.Printf(
+		"midtrans create payment order_id=%s payment_method=%s gross_amount=%d enabled_payments=%v",
+		input.OrderID,
+		input.PaymentMethod,
+		input.GrossAmount,
+		enabledPayments,
+	)
+
+	snapResponse, err := s.createSnap(payload)
+	if err != nil {
+		return CreatePaymentTransactionResult{}, err
+	}
+
+	return CreatePaymentTransactionResult{
+		OrderID:       input.OrderID,
+		PaymentMethod: strings.ToLower(strings.TrimSpace(input.PaymentMethod)),
+		SnapToken:     snapResponse.Token,
+		RedirectURL:   snapResponse.RedirectURL,
+		PayloadSummary: PayloadSummary{
+			EnabledPayments: enabledPayments,
+			GrossAmount:     input.GrossAmount,
+		},
+	}, nil
+}
+
+func (s *MidtransService) BuildPaymentPayload(input CreatePaymentTransactionInput) (map[string]any, []string, error) {
+	if strings.TrimSpace(input.OrderID) == "" {
+		return nil, nil, errors.New("order_id is required")
+	}
+	if input.GrossAmount <= 0 {
+		return nil, nil, errors.New("gross_amount must be greater than 0")
+	}
+
+	enabledPayments, err := EnabledPaymentsForMethod(input.PaymentMethod)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	customerDetails := map[string]any{}
+	if firstName := strings.TrimSpace(input.Customer.FirstName); firstName != "" {
+		customerDetails["first_name"] = firstName
+	}
+	if email := strings.TrimSpace(input.Customer.Email); email != "" {
+		customerDetails["email"] = email
+	}
+	if phone := strings.TrimSpace(input.Customer.Phone); phone != "" {
+		customerDetails["phone"] = phone
+	}
+
+	payload := map[string]any{
+		"transaction_details": map[string]any{
+			"order_id":     strings.TrimSpace(input.OrderID),
+			"gross_amount": input.GrossAmount,
+		},
+		"enabled_payments": enabledPayments,
+	}
+	if len(customerDetails) > 0 {
+		payload["customer_details"] = customerDetails
+	}
+
+	return payload, enabledPayments, nil
+}
+
 func (s *MidtransService) CreateSnapTransaction(order models.Order, payment models.Payment) (SnapResponse, error) {
 	if s.serverKey == "" {
 		return SnapResponse{}, errors.New("MIDTRANS_SERVER_KEY is required")
@@ -88,6 +188,20 @@ func (s *MidtransService) CreateSnapTransaction(order models.Order, payment mode
 	if err != nil {
 		return SnapResponse{}, err
 	}
+	if enabledPayments, ok := payload["enabled_payments"].([]string); ok {
+		log.Printf(
+			"midtrans create snap order_id=%s payment_method=%s gross_amount=%d enabled_payments=%v",
+			midtransOrderID(order, payment),
+			payment.PaymentMethod,
+			order.TotalAmount,
+			enabledPayments,
+		)
+	}
+
+	return s.createSnap(payload)
+}
+
+func (s *MidtransService) createSnap(payload map[string]any) (SnapResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return SnapResponse{}, err
@@ -112,6 +226,7 @@ func (s *MidtransService) CreateSnapTransaction(order models.Order, payment mode
 		return SnapResponse{}, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		log.Printf("midtrans snap error status=%d response=%s", resp.StatusCode, string(responseBody))
 		return SnapResponse{}, fmt.Errorf("midtrans snap request failed with status %d: %s", resp.StatusCode, string(responseBody))
 	}
 
@@ -227,8 +342,22 @@ func (s *MidtransService) customerPaymentFinishURL(orderCode string) string {
 	return strings.TrimRight(s.frontendURL, "/") + "/order/payment-result?order_code=" + url.QueryEscape(orderCode)
 }
 
+func EnabledPaymentsForMethod(method string) ([]string, error) {
+	if strings.ToLower(strings.TrimSpace(method)) != "qris" {
+		return nil, fmt.Errorf("invalid payment method: %s", method)
+	}
+	return []string{"qris"}, nil
+}
+
 func enabledPaymentsFor(method models.PaymentMethod) []string {
-	return []string{"gopay", "shopeepay"}
+	switch method {
+	case models.PaymentQRIS, models.PaymentOnline:
+		// Project lama masih memiliki payment_method "online"; untuk kebutuhan
+		// saat ini semua transaksi Midtrans dipaksa QRIS-only.
+		return []string{"qris"}
+	default:
+		return []string{}
+	}
 }
 
 func midtransItemName(item models.OrderItem) string {

@@ -84,6 +84,8 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	public.Get("/qrcode/:code", publicHandler.GetQRCode)
 
 	midtransService := services.NewMidtransService(cfg)
+	corePaymentService := services.NewPaymentService(config.NewMidtransCoreClient(cfg))
+	RegisterPaymentRoutes(api, handlers.NewCorePaymentHandler(corePaymentService))
 
 	publicOrderHandler := handlers.NewPublicOrderHandler(db, midtransService)
 	public.Post("/orders", publicOrderHandler.Create)
@@ -111,7 +113,10 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	cashier.Get("/payments/waiting-confirmation", cashierHandler.ListWaitingPayments)
 
 	midtransHandler := handlers.NewMidtransPaymentHandler(db, midtransService)
+	paymentHandler := handlers.NewPaymentHandler(midtransService)
 	payments := api.Group("/payments")
+	payments.Post("/create", paymentHandler.Create)
+	payments.Post("/webhook", paymentHandler.Webhook)
 	payments.Post("/midtrans/notification", midtransHandler.Notification)
 	payments.Post("/midtrans/create-snap/:order_id", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.CreateSnap)
 	payments.Post("/midtrans/sync/:order_code", jwtAuth, middleware.AllowRoles(models.RoleCashier, models.RoleAdmin), midtransHandler.SyncStatus)

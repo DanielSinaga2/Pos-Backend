@@ -5,6 +5,35 @@
 @orderCode = paste-order-code-here
 @orderId = paste-order-id-here
 
+### Midtrans direct create QRIS payment
+POST {{baseUrl}}/api/payments/create
+Content-Type: application/json
+
+{
+  "order_id": "ORD-20260621-0001",
+  "gross_amount": 30000,
+  "customer": {
+    "first_name": "Daniel",
+    "email": "daniel@example.com",
+    "phone": "08123456789"
+  },
+  "payment_method": "qris"
+}
+
+### Midtrans webhook testing example
+POST {{baseUrl}}/api/payments/webhook
+Content-Type: application/json
+
+{
+  "order_id": "ORD-20260621-0001",
+  "transaction_status": "settlement",
+  "fraud_status": "accept",
+  "payment_type": "qris",
+  "transaction_id": "test-transaction-id",
+  "gross_amount": "30000.00",
+  "status_code": "200"
+}
+
 ### 1. Health check
 GET {{baseUrl}}/api/health
 

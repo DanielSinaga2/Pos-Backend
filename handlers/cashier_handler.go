@@ -104,10 +104,10 @@ func (h *CashierHandler) RetryPayment(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusNotFound, "payment not found")
 	}
 	if order.Payment.PaymentMethod == models.PaymentCash {
-		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need online payment retry")
+		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need QRIS payment retry")
 	}
 	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
-		return utils.Error(c, fiber.StatusBadRequest, "payment retry is only available for qris or online payment")
+		return utils.Error(c, fiber.StatusBadRequest, "payment retry is only available for qris payment")
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return utils.Error(c, fiber.StatusConflict, "payment has already been paid")

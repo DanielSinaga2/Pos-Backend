@@ -47,6 +47,7 @@ MIDTRANS_SERVER_KEY=
 MIDTRANS_CLIENT_KEY=
 MIDTRANS_IS_PRODUCTION=false
 FRONTEND_PAYMENT_FINISH_URL=http://localhost:3000/payment/finish
+APP_BASE_URL=http://localhost:8080
 ```
 
 Gunakan `RUN_SEEDER=true` untuk membuat data awal secara otomatis saat startup. Seeder bersifat idempoten dan tidak membuat duplikat jika aplikasi dijalankan berkali-kali. Setelah bootstrap awal, nilainya dapat diubah menjadi `false`.
@@ -199,24 +200,77 @@ PATCH /api/cashier/orders/:id/complete
 GET   /api/cashier/payments/waiting-confirmation
 ```
 
+### Midtrans Core API QRIS
+
+Endpoint Core API ini tidak menggunakan Snap atau popup:
+
+```text
+POST /api/payment/create
+GET  /api/payment/status/:order_id
+```
+
+Gunakan kredensial Sandbox berikut pada `.env`:
+
+```env
+MIDTRANS_SERVER_KEY=SB-Mid-server-your-server-key
+MIDTRANS_CLIENT_KEY=SB-Mid-client-your-client-key
+MIDTRANS_IS_PRODUCTION=false
+```
+
+Membuat transaksi QRIS:
+
+```powershell
+curl -X POST http://localhost:3001/api/payment/create `
+  -H "Content-Type: application/json" `
+  -d '{"amount":45000}'
+```
+
+Mengecek status transaksi:
+
+```powershell
+curl http://localhost:3001/api/payment/status/QRIS-your-order-id
+```
+
+Response status yang didukung adalah `pending`, `settlement`, `expire`, `cancel`, dan `deny`.
+
 ### Midtrans Snap
 
 ```text
+POST /api/payments/create
+POST /api/payments/webhook
 POST /api/payments/midtrans/create-snap/:order_id
 POST /api/payments/midtrans/notification
 POST /api/payments/midtrans/sync/:order_code
 GET  /api/payments/midtrans/status/:order_code
 ```
 
-`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris` atau `online`, lalu mengembalikan `snap_token` dan `redirect_url` untuk frontend.
+`POST /api/payments/create` membuat transaksi Snap langsung dari payload frontend. Field `payment_method` hanya menerima `qris`; backend selalu mengirim `enabled_payments: ["qris"]` agar halaman Snap tidak menampilkan metode lain.
+
+Contoh QRIS:
+
+```powershell
+curl -X POST http://localhost:8080/api/payments/create `
+  -H "Content-Type: application/json" `
+  -d "{\"order_id\":\"ORD-20260621-0001\",\"gross_amount\":30000,\"customer\":{\"first_name\":\"Daniel\",\"email\":\"daniel@example.com\",\"phone\":\"08123456789\"},\"payment_method\":\"qris\"}"
+```
+
+Contoh webhook test lokal:
+
+```powershell
+curl -X POST http://localhost:8080/api/payments/webhook `
+  -H "Content-Type: application/json" `
+  -d "{\"order_id\":\"ORD-20260621-0001\",\"transaction_status\":\"settlement\",\"fraud_status\":\"accept\",\"payment_type\":\"qris\",\"transaction_id\":\"test-transaction-id\",\"gross_amount\":\"30000.00\",\"status_code\":\"200\"}"
+```
+
+`POST /api/payments/midtrans/create-snap/:order_id` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipanggil setelah order dibuat untuk payment method `qris`. Jika masih ada data lama dengan payment method `online`, Snap yang dibuat tetap QRIS-only dan mengirim `enabled_payments: ["qris"]`.
 
 `POST /api/payments/midtrans/notification` adalah webhook public dari Midtrans. Untuk testing localhost, gunakan ngrok atau deploy backend agar URL webhook dapat diakses dari dashboard Midtrans Sandbox. Gunakan `MIDTRANS_IS_PRODUCTION=false` untuk Sandbox.
 
 `POST /api/payments/midtrans/sync/:order_code` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini berguna untuk development lokal saat webhook tidak bisa dipakai: backend akan mengecek status transaksi ke Midtrans Transaction Status API, lalu menyinkronkan status order dan payment.
 
-`GET /api/cashier/orders/:id/payment-status` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipakai frontend kasir setelah customer menyelesaikan Snap: backend akan mengecek status terbaru ke Midtrans untuk order online yang punya Snap/Midtrans reference, menyimpan status sukses, lalu mengembalikan data order terbaru.
+`GET /api/cashier/orders/:id/payment-status` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini dipakai frontend kasir setelah customer menyelesaikan Snap QRIS: backend akan mengecek status terbaru ke Midtrans, menyimpan status sukses, lalu mengembalikan data order terbaru.
 
-`POST /api/cashier/orders/:id/payment/retry` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini hanya untuk order `qris` atau `online` yang belum paid; backend akan memakai `snap_token` lama jika masih pending, atau membuat transaksi Snap baru untuk retry jika transaksi lama sudah final/gagal.
+`POST /api/cashier/orders/:id/payment/retry` membutuhkan JWT role `cashier` atau `admin`. Endpoint ini hanya untuk order QRIS yang belum paid; backend akan memakai `snap_token` lama jika masih pending, atau membuat transaksi Snap QRIS-only baru untuk retry jika transaksi lama sudah final/gagal.
 
 Manual confirm payment tetap tersedia melalui:
 

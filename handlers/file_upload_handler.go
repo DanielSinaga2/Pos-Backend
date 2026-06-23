@@ -111,7 +111,7 @@ func validatePaymentProofUpload(order models.Order) string {
 		return "payment record not found"
 	}
 	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
-		return "payment proof is only accepted for qris or online payment"
+		return "payment proof is only accepted for qris payment"
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return "payment has already been confirmed"

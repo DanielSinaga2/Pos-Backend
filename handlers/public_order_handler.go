@@ -174,7 +174,7 @@ func (h *PublicOrderHandler) CreateSnap(c *fiber.Ctx) error {
 		return utils.Error(c, fiber.StatusBadRequest, "cash payment does not need Midtrans")
 	}
 	if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
-		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris or online")
+		return utils.Error(c, fiber.StatusBadRequest, "payment_method must be qris")
 	}
 	if order.Payment.Status == models.PaymentPaid {
 		return utils.Error(c, fiber.StatusConflict, "payment already paid")
@@ -256,7 +256,7 @@ func (h *PublicOrderHandler) UploadPaymentProof(c *fiber.Ctx) error {
 			return errors.New("payment record not found")
 		}
 		if !models.IsOnlinePaymentMethod(order.Payment.PaymentMethod) {
-			return &orderServiceError{Status: 400, Message: "payment proof is only accepted for qris or online payment"}
+			return &orderServiceError{Status: 400, Message: "payment proof is only accepted for qris payment"}
 		}
 		if order.Payment.Status == models.PaymentPaid {
 			return &orderServiceError{Status: 409, Message: "payment has already been confirmed"}

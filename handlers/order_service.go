@@ -178,10 +178,10 @@ func validateCreateOrderRequest(request createOrderRequest, public bool) string 
 		}
 	}
 	if public && !isValidPublicPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash, qris, or online"
+		return "payment_method must be cash or qris"
 	}
 	if !public && !isValidCashierPaymentMethod(request.PaymentMethod) {
-		return "payment_method must be cash, qris, or online"
+		return "payment_method must be cash or qris"
 	}
 	return ""
 }
@@ -376,9 +376,9 @@ func preloadOrder(db *gorm.DB) *gorm.DB {
 }
 
 func isValidPublicPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash || models.IsOnlinePaymentMethod(method)
+	return method == models.PaymentCash || method == models.PaymentQRIS
 }
 
 func isValidCashierPaymentMethod(method models.PaymentMethod) bool {
-	return method == models.PaymentCash || models.IsOnlinePaymentMethod(method)
+	return method == models.PaymentCash || method == models.PaymentQRIS
 }
