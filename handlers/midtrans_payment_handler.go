@@ -114,6 +114,11 @@ func (h *MidtransPaymentHandler) Notification(c *fiber.Ctx) (err error) {
 			"message": "midtrans test notification received",
 		})
 	}
+	log.Printf(
+		"Midtrans status sync order=%s transaction_status=%s",
+		payload.OrderID,
+		payload.TransactionStatus,
+	)
 
 	var processedOrderCode string
 	err = h.db.Transaction(func(tx *gorm.DB) error {

@@ -40,6 +40,9 @@ type Payment struct {
 	TransactionID   *string       `gorm:"size:100;index" json:"transaction_id,omitempty"`
 	FraudStatus     *string       `gorm:"size:50" json:"fraud_status,omitempty"`
 	PaymentType     *string       `gorm:"size:50" json:"payment_type,omitempty"`
+	GrossAmount     *int64        `gorm:"column:gross_amount" json:"gross_amount,omitempty"`
+	QRString        *string       `gorm:"size:1000;column:qr_string" json:"qr_string,omitempty"`
+	ExpiryTime      *string       `gorm:"size:30;column:expiry_time" json:"expiry_time,omitempty"`
 	PaidAt          *time.Time    `json:"paid_at,omitempty"`
 	ConfirmedBy     *uint         `gorm:"index" json:"confirmed_by"`
 	Confirmer       *User         `gorm:"foreignKey:ConfirmedBy;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"confirmer,omitempty"`

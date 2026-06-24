@@ -84,8 +84,8 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	public.Get("/qrcode/:code", publicHandler.GetQRCode)
 
 	midtransService := services.NewMidtransService(cfg)
-	corePaymentService := services.NewPaymentService(config.NewMidtransCoreClient(cfg))
-	RegisterPaymentRoutes(api, handlers.NewCorePaymentHandler(corePaymentService))
+	corePaymentService := services.NewPaymentService(config.NewMidtransCoreClient(cfg), db)
+	RegisterPaymentRoutes(api, handlers.NewCorePaymentHandler(corePaymentService, db))
 
 	publicOrderHandler := handlers.NewPublicOrderHandler(db, midtransService)
 	public.Post("/orders", publicOrderHandler.Create)

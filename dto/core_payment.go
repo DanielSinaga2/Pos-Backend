@@ -16,5 +16,6 @@ type CorePaymentCreateResponse struct {
 }
 
 type CorePaymentStatusResponse struct {
-	Status string `json:"status"`
+	Status            string `json:"status"`
+	TransactionStatus string `json:"transaction_status"`
 }
